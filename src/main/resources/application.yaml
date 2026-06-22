@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: drrr
+
+
+drrr:
+  user:
+    reconnect-timeout: 5m
+  lobby:
+    active-window: 5m
+  room:
+    empty-expiry: 24h
+    max-members-min: 1
+    max-members-max: 20
+  websocket:
+    endpoint: /ws/rooms
