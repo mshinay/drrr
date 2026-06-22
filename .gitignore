@@ -31,3 +31,11 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# keep GitHub repository code-only
+.mvn/
+mvnw
+mvnw.cmd
+compose.yaml
+doc/
+docs/
