@@ -37,5 +37,4 @@ build/
 mvnw
 mvnw.cmd
 compose.yaml
-doc/
-docs/
+
