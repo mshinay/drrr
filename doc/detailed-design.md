@@ -230,7 +230,8 @@
 | --- | --- | --- |
 | `drrr:user:{userId}` | String | 用户会话主数据 |
 | `drrr:room:{roomId}` | String | 房间主数据 |
-| `drrr:room:members:{roomId}` | ZSet | 房间成员索引，score=`joinedAt` |
+| `drrr:room:members:{roomId}` | ZSet | 房间成员顺序索引，member=`userId`，score=`joinedAt` |
+| `drrr:room:member-detail:{roomId}` | Hash | 房间成员详情，field=`userId`，value=`RoomMember JSON` |
 | `drrr:room:messages:{roomId}` | List | 房间消息流 |
 | `drrr:room:events:{roomId}` | List | 房间轻量事件流 |
 | `drrr:room:active` | ZSet | 活跃房间索引，score=`lastActiveAt` |
@@ -244,7 +245,7 @@
 
 ### 4.3 默认 Redis 操作边界
 
-- 房间模块只负责 `room` 和房间成员关系骨架的维护
+- 房间模块只负责 `room`、`room:members` 与 `room:member-detail` 的维护
 - 用户会话模块只负责 `user` 和 `user:reconnecting` 的维护
 - 聊天模块只负责 `messages` 的写入、裁剪、可见性过滤
 - 房间事件模块只负责 `events` 的写入与读取
@@ -457,6 +458,7 @@
 
 - `drrr:room:{roomId}`
 - `drrr:room:members:{roomId}`
+- `drrr:room:member-detail:{roomId}`
 - `drrr:room:active`
 - `drrr:room:empty`
 
@@ -472,7 +474,7 @@
    - `ownerUserId` 为创建者
    - `lastActiveAt` 为当前时间
 5. 写入 `drrr:room:{roomId}`。
-6. 创建首个 `RoomMember`，写入成员索引。
+6. 创建首个 `RoomMember`，写入成员顺序索引与成员详情。
 7. 更新创建者 `UserSession.currentRoomId`。
 8. 写入 `drrr:room:active`。
 9. 返回房间详情。
@@ -483,9 +485,9 @@
 2. 读取房间主数据并校验状态不是 `EXPIRED`。
 3. 校验用户是否被 Ban。
 4. 校验房间密码。
-5. 校验房间人数是否已达上限。
-6. 校验房间内昵称是否重复。
-7. 创建 `RoomMember` 逻辑关系，写入成员索引。
+5. 读取 `drrr:room:members:{roomId}` 校验房间人数是否已达上限。
+6. 读取 `drrr:room:member-detail:{roomId}` 校验房间内昵称是否重复。
+7. 创建 `RoomMember` 逻辑关系，写入成员顺序索引与成员详情。
 8. 更新 `UserSession.currentRoomId`。
 9. 更新 `Room.lastActiveAt`，若房间原状态为 `EMPTY` 则恢复为 `ACTIVE` 并清空 `emptySince`。
 10. 触发房间事件模块记录 `USER_JOIN` 事件。
@@ -495,7 +497,7 @@
 #### 5.3.3 主动离开房间
 
 1. 校验用户属于该房间。
-2. 删除成员索引。
+2. 删除成员顺序索引与成员详情。
 3. 清空 `UserSession.currentRoomId`，状态置为 `ONLINE` 或大厅态。
 4. 调用房主管理模块判断是否需要继承。
 5. 若房间无在线成员，则置为 `EMPTY`，记录 `emptySince`，写入 `drrr:room:empty`。
@@ -741,7 +743,7 @@
 
 #### 5.6.2 房主继承
 
-1. 读取 `drrr:room:members:{roomId}` 按 `joinedAt` 升序获取候选人。
+1. 读取 `drrr:room:members:{roomId}` 按 `joinedAt` 升序获取候选 `userId`，再从 `drrr:room:member-detail:{roomId}` 读取候选详情。
 2. 过滤已离房成员。
 3. 选择最早加入且仍为有效成员的用户。
 4. 更新旧房主成员标记为 `false`。
@@ -963,6 +965,7 @@
 - `drrr:room:empty`
 - `drrr:room:{roomId}`
 - `drrr:room:members:{roomId}`
+- `drrr:room:member-detail:{roomId}`
 - `drrr:room:messages:{roomId}`
 - `drrr:room:events:{roomId}`
 - `drrr:room:mute:{roomId}`
@@ -1055,7 +1058,7 @@
 ### 7.2 用户加入房间流程
 
 1. 前端提交 `roomId`、密码。
-2. 房间模块校验房间状态、人数、密码、昵称重复、Ban 状态。
+2. 房间模块分别通过成员顺序索引和成员详情校验房间状态、人数、密码、昵称重复、Ban 状态。
 3. 房间模块写入成员关系并更新 `UserSession.currentRoomId`。
 4. 聊天模块读取历史消息。
 5. WebSocket 建立后广播“加入房间”系统消息。
@@ -1131,7 +1134,7 @@
 12. 每个房间维护独立轻量事件日志，记录状态流转与治理事件，并在房间销毁时一并删除。
 13. 系统消息由房间事件驱动生成，但事件日志与聊天消息分离存储。
 14. 房间消息统一写入同一消息流，通过消息类型和可见性控制展示范围。
-15. Redis 复杂对象统一存为 JSON，索引使用 List、Set、ZSet。
+15. Redis 复杂对象统一存为 JSON；房间成员采用 `ZSet(userId->joinedAt)` + `Hash(userId->RoomMember JSON)` 双结构，其余索引继续使用 List、Set、ZSet。
 16. 房间销毁后不保留墓碑记录，同名房间可立即重新创建。
 17. 创建房间成功后不额外生成“房间已创建”系统消息。
 18. 并发修改默认由单体服务内按 `roomId` 粒度串行化处理。
@@ -1141,4 +1144,6 @@
 ## 10. 待确认问题
 
 当前无。
+
+
 

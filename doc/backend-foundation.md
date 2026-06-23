@@ -270,9 +270,9 @@ Redis 中复杂对象统一 JSON 序列化。
 适用流程：
 
 - 创建房间后写成员和索引。
-- 加入房间时校验人数、昵称、Ban 并写成员。
+- 加入房间时通过 `room:members` 校验人数，通过 `room:member-detail` 校验昵称与读取详情，并同时写入两类成员 Key。
 - 离开房间时删除成员、继承房主、推进空房状态。
-- 踢出或 Ban 时删除成员、清理用户房间上下文、生成事件。
+- 踢出或 Ban 时同步删除成员顺序索引与成员详情、清理用户房间上下文、生成事件。
 - 空房销毁时删除全部房间运行态 key。
 
 该锁不解决多实例问题。多实例不属于 MVP。
@@ -387,6 +387,7 @@ Redis 中复杂对象统一 JSON 序列化。
 | `drrr:user:{userId}` | String(JSON) | `UserSessionRepository` |
 | `drrr:room:{roomId}` | String(JSON) | `RoomRepository` |
 | `drrr:room:members:{roomId}` | ZSet | `RoomMemberRepository` |
+| `drrr:room:member-detail:{roomId}` | Hash(JSON) | `RoomMemberRepository` |
 | `drrr:room:messages:{roomId}` | List | `MessageRepository` |
 | `drrr:room:events:{roomId}` | List | `RoomEventRepository` |
 | `drrr:room:active` | ZSet | `RoomIndexRepository` |
@@ -402,6 +403,7 @@ Redis 中复杂对象统一 JSON 序列化。
 
 - Repository 返回领域对象或明确的缺失结果，不抛出业务异常给上层猜测。
 - Repository 内部集中处理 JSON 编解码。
+- RoomMemberRepository 维护双结构：ZSet(userId -> joinedAt) 负责顺序与计数，Hash(userId -> RoomMember JSON) 负责详情读取与状态更新。
 - Repository 内部集中处理 Redis key 拼接。
 - Service 不拼 Redis key。
 - Controller 和 WebSocket handler 不直接访问 Repository。
@@ -422,6 +424,7 @@ Redis 中复杂对象统一 JSON 序列化。
 
 - `drrr:room:{roomId}`
 - `drrr:room:members:{roomId}`
+- `drrr:room:member-detail:{roomId}`
 - `drrr:room:messages:{roomId}`
 - `drrr:room:events:{roomId}`
 - `drrr:room:mute:{roomId}`
@@ -877,4 +880,6 @@ drrr:
 ## 15. 当前待确认问题
 
 当前无。
+
+
 

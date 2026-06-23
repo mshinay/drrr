@@ -112,6 +112,7 @@ server -> client：
 | `drrr:user:{userId}` | String(JSON) | 用户会话模块、房间模块、定时清理模块 |
 | `drrr:room:{roomId}` | String(JSON) | 大厅模块、房间模块、聊天模块、房主管理模块、导出模块、定时清理模块 |
 | `drrr:room:members:{roomId}` | ZSet | 大厅模块、房间模块、房主管理模块、聊天模块、治理模块、定时清理模块 |
+| `drrr:room:member-detail:{roomId}` | Hash(JSON) | 大厅模块、房间模块、房主管理模块、聊天模块、治理模块、定时清理模块 |
 | `drrr:room:messages:{roomId}` | List | 聊天模块、导出模块、定时清理模块 |
 | `drrr:room:events:{roomId}` | List | 房间事件模块、聊天模块、导出模块、定时清理模块 |
 | `drrr:room:active` | ZSet | 大厅模块、房间模块、聊天模块、定时清理模块 |
@@ -283,7 +284,8 @@ side effects:
 
 - 读 `drrr:user:{userId}`：校验用户存在且未在其他房间。
 - 写 `drrr:room:{roomId}`：创建房间主数据，密码只写哈希。
-- 写 `drrr:room:members:{roomId}`：写入创建者成员关系，score=`joinedAt`。
+- 写 `drrr:room:members:{roomId}`：写入创建者成员顺序索引，member=`userId`，score=`joinedAt`。
+- 写 `drrr:room:member-detail:{roomId}`：写入创建者 `RoomMember` JSON。
 - 写 `drrr:user:{userId}`：更新 `currentRoomId`、`updatedAt`。
 - 写 `drrr:room:active`：score=`lastActiveAt`。
 - 不写 `drrr:room:events:{roomId}`：详细设计默认创建房间不额外生成系统消息。
@@ -359,7 +361,10 @@ side effects:
 
 - 读 `drrr:user:{userId}`：校验会话与昵称。
 - 读/写 `drrr:room:{roomId}`：校验房间状态、密码、配置；更新 `lastActiveAt`，必要时从 `EMPTY` 恢复为 `ACTIVE` 并清空 `emptySince`。
-- 读/写 `drrr:room:members:{roomId}`：校验人数、昵称重复，写入成员关系。
+- 读 `drrr:room:members:{roomId}`：校验人数，按 `joinedAt` 维护成员顺序。
+- 读 `drrr:room:member-detail:{roomId}`：校验昵称重复并读取成员详情。
+- 写 `drrr:room:members:{roomId}`：写入成员顺序索引。
+- 写 `drrr:room:member-detail:{roomId}`：写入成员详情。
 - 读 `drrr:room:ban:{roomId}`：校验 Ban。
 - 写 `drrr:user:{userId}`：更新 `currentRoomId` 与状态。
 - 写 `drrr:room:active`：更新活跃索引。
@@ -409,7 +414,8 @@ side effects:
 
 - 读/写 `drrr:user:{userId}`：清空 `currentRoomId`，保持大厅态 `ONLINE`。
 - 读/写 `drrr:room:{roomId}`：必要时更新 `ownerUserId`、`status`、`emptySince`、`lastActiveAt`。
-- 读/写 `drrr:room:members:{roomId}`：删除离房成员，按 `joinedAt` 选择继承人。
+- 读 `drrr:room:members:{roomId}`：删除离房成员并按 `joinedAt` 选择继承候选。
+- 读/删 `drrr:room:member-detail:{roomId}`：读取并删除离房成员详情。
 - 写 `drrr:room:events:{roomId}`：追加 `USER_LEAVE`；若房主转移追加 `OWNER_TRANSFER`；若无人追加 `ROOM_EMPTY`。
 - 写 `drrr:room:messages:{roomId}`：由上述事件驱动生成 `SYSTEM` 消息。
 - 写/删 `drrr:room:active`：房间仍有成员时更新；进入 `EMPTY` 时可保留房间列表展示但状态为 `EMPTY`。
@@ -475,7 +481,7 @@ side effects:
 
 - 读 `drrr:user:{operatorUserId}`：校验操作者存在。
 - 读/写 `drrr:room:{roomId}`：校验房主权限并更新房间字段。
-- 读 `drrr:room:members:{roomId}`：校验操作者是当前成员。
+- 读 `drrr:room:members:{roomId}` 与 `drrr:room:member-detail:{roomId}`：校验操作者是当前成员。
 - 写 `drrr:room:active`：更新活跃索引。
 - 写 `drrr:room:messages:{roomId}`：生成 `SYSTEM` 消息说明房间配置变更。
 - 不写 `drrr:room:events:{roomId}`：当前 `RoomEvent` 类型列表未包含房间配置变更事件，系统消息可由房间模块直接触发聊天模块生成。
@@ -528,7 +534,7 @@ error code:
 side effects:
 
 - 读 `drrr:room:{roomId}`：校验当前房主。
-- 读 `drrr:room:members:{roomId}`：校验操作者与目标均为成员。
+- 读 `drrr:room:members:{roomId}` 与 `drrr:room:member-detail:{roomId}`：校验操作者与目标均为成员。
 - 写 `drrr:room:mute:{roomId}`：score=`endAt`。
 - 写 `drrr:room:mute:detail:{roomId}:{targetUserId}`：写入 `MuteRecord`。
 - 写 `drrr:room:events:{roomId}`：追加 `USER_MUTED`。
@@ -577,7 +583,8 @@ error code:
 side effects:
 
 - 读 `drrr:room:{roomId}`：校验当前房主。
-- 读/写 `drrr:room:members:{roomId}`：删除目标成员，必要时触发继承。
+- 读 `drrr:room:members:{roomId}`：删除目标成员并在必要时触发继承。
+- 读/删 `drrr:room:member-detail:{roomId}`：删除目标成员详情。
 - 读/写 `drrr:user:{targetUserId}`：清空目标 `currentRoomId`，阻止旧 `roomId` 自动重连。
 - 删 `drrr:user:reconnecting` 中目标用户记录。
 - 写 `drrr:room:events:{roomId}`：追加 `USER_KICKED`；必要时追加 `OWNER_TRANSFER` 或 `ROOM_EMPTY`。
@@ -624,11 +631,12 @@ error code:
 side effects:
 
 - 读 `drrr:room:{roomId}`：校验当前房主。
-- 读 `drrr:room:members:{roomId}`：校验操作者成员身份；目标若在房间内则执行离房。
+- 读 `drrr:room:members:{roomId}` 与 `drrr:room:member-detail:{roomId}`：校验操作者成员身份；目标若在房间内则执行离房。
 - 写 `drrr:room:ban:{roomId}`：加入目标 `userId`。
 - 写 `drrr:room:ban:detail:{roomId}:{targetUserId}`：写入 `BanRecord`。
 - 若目标在房间内，写 `drrr:user:{targetUserId}`：清空目标 `currentRoomId`。
-- 若目标在房间内，写 `drrr:room:members:{roomId}`：删除目标成员。
+- 若目标在房间内，删 `drrr:room:members:{roomId}`：删除目标成员顺序索引。
+- 若目标在房间内，删 `drrr:room:member-detail:{roomId}`：删除目标成员详情。
 - 删 `drrr:user:reconnecting` 中目标用户记录。
 - 写 `drrr:room:events:{roomId}`：追加 `USER_BANNED`；若执行离房导致房主继承或空房，追加对应事件。
 - 写 `drrr:room:messages:{roomId}`：由事件驱动生成 `SYSTEM` 消息。
@@ -700,6 +708,7 @@ path: `/ws/rooms/{roomId}`
 - `UserSession.currentRoomId` 与 `{roomId}` 一致。
 - `drrr:room:{roomId}` 存在且未过期。
 - `drrr:room:members:{roomId}` 中存在该用户。
+- `drrr:room:member-detail:{roomId}` 中存在该用户详情。
 
 连接失败时直接拒绝 WebSocket 连接；连接建立成功后，用户处于房间实时通信上下文。
 
@@ -732,7 +741,7 @@ payload schema:
 Redis 读写：
 
 - 读 `drrr:room:{roomId}`：获取房间配置与历史策略。
-- 读 `drrr:room:members:{roomId}`：校验发送者成员身份。
+- 读 `drrr:room:members:{roomId}` 与 `drrr:room:member-detail:{roomId}`：校验发送者成员身份。
 - 读 `drrr:room:mute:{roomId}`：校验禁言。
 - 读/删 `drrr:room:mute:detail:{roomId}:{senderUserId}`：禁言过期时清理详情。
 - 写 `drrr:room:messages:{roomId}`：追加 `PUBLIC` 消息并按历史策略裁剪。
@@ -769,7 +778,7 @@ payload schema:
 Redis 读写：
 
 - 读 `drrr:room:{roomId}`：获取房间配置与历史策略。
-- 读 `drrr:room:members:{roomId}`：校验发送者与接收者都属于房间。
+- 读 `drrr:room:members:{roomId}` 与 `drrr:room:member-detail:{roomId}`：校验发送者与接收者都属于房间。
 - 读 `drrr:room:mute:{roomId}`：校验发送者禁言。
 - 读/删 `drrr:room:mute:detail:{roomId}:{senderUserId}`：禁言过期时清理详情。
 - 写 `drrr:room:messages:{roomId}`：追加 `DIRECT` 消息并按历史策略裁剪。
@@ -805,7 +814,8 @@ payload schema:
 Redis 读写：
 
 - 读/写 `drrr:user:{userId}`：校验 `currentRoomId`、状态和断线时间，恢复为 `ONLINE`。
-- 读/写 `drrr:room:members:{roomId}`：恢复成员状态为 `ONLINE`。
+- 读 `drrr:room:member-detail:{roomId}`：读取原成员详情。
+- 写 `drrr:room:member-detail:{roomId}`：恢复成员状态为 `ONLINE`。
 - 读 `drrr:room:{roomId}`：校验房间存在且未过期。
 - 删 `drrr:user:reconnecting`：移除重连索引。
 - 写 `drrr:room:events:{roomId}`：追加 `USER_RECONNECTED`。
@@ -937,7 +947,7 @@ payload schema:
 Redis 来源：
 
 - 读 `drrr:room:{roomId}`。
-- 读 `drrr:room:members:{roomId}`。
+- 读 `drrr:room:members:{roomId}` 与 `drrr:room:member-detail:{roomId}`。
 - 读 `drrr:room:messages:{roomId}`，并按当前用户可见范围过滤。
 
 ---
@@ -971,6 +981,7 @@ Redis 读写：
 - 写 `drrr:room:events:{roomId}`：追加 `ROOM_EXPIRED`。
 - 删 `drrr:room:{roomId}`。
 - 删 `drrr:room:members:{roomId}`。
+- 删 `drrr:room:member-detail:{roomId}`。
 - 删 `drrr:room:messages:{roomId}`。
 - 删 `drrr:room:events:{roomId}`。
 - 删 `drrr:room:mute:{roomId}`。
@@ -1029,7 +1040,8 @@ WebSocket 断开不是 client message type，但属于协议必须处理的连�
 Redis 读写：
 
 - 读/写 `drrr:user:{userId}`：设置 `status=RECONNECTING`、`connected=false`、`lastDisconnectedAt`。
-- 读/写 `drrr:room:members:{roomId}`：设置成员状态为 `RECONNECTING`。
+- 读 `drrr:room:member-detail:{roomId}`：读取原成员详情。
+- 写 `drrr:room:member-detail:{roomId}`：设置成员状态为 `RECONNECTING`。
 - 写 `drrr:user:reconnecting`：score=`lastDisconnectedAt`。
 - 写 `drrr:room:events:{roomId}`：追加 `USER_RECONNECTING`。
 - 写 `drrr:room:messages:{roomId}`：由 `USER_RECONNECTING` 事件驱动生成 `SYSTEM` 消息。
@@ -1166,6 +1178,7 @@ flowchart LR
 
 - `drrr:room:{roomId}`
 - `drrr:room:members:{roomId}`
+- `drrr:room:member-detail:{roomId}`
 - `drrr:room:messages:{roomId}`
 - `drrr:room:events:{roomId}`
 - `drrr:room:mute:{roomId}`
@@ -1185,4 +1198,6 @@ flowchart LR
 - 不提供图片、文件、语音、视频消息类型。
 - 不提供永久消息查询接口。
 - 不提供 MQ、多实例、数据库相关契约。
+
+
 

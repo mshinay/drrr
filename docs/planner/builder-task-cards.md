@@ -168,6 +168,7 @@ Encapsulate all documented Redis reads and writes behind repository classes, wit
   - `drrr:lobby:active-users`
   - `drrr:room:{roomId}`
   - `drrr:room:members:{roomId}`
+  - `drrr:room:member-detail:{roomId}`
   - `drrr:room:active`
   - `drrr:room:empty`
   - `drrr:room:messages:{roomId}`
@@ -176,7 +177,7 @@ Encapsulate all documented Redis reads and writes behind repository classes, wit
   - `drrr:room:mute:detail:{roomId}:{userId}`
   - `drrr:room:ban:{roomId}`
   - `drrr:room:ban:detail:{roomId}:{userId}`
-- Add repository tests for String, List, Set, and ZSet behavior.
+- Add repository tests for String, Hash, List, Set, and ZSet behavior.
 - Add cleanup helpers for tests if needed.
 
 ### Reference Intent
@@ -284,7 +285,7 @@ Implement the core room lifecycle: create room, join room, leave room, member st
 - Implement `PATCH /api/rooms/{roomId}` or the method documented in `doc/api-spec.md`.
 - Validate room name, max members, password, nickname duplication, current user room context, room status, and room full state.
 - Store password hash only, not plaintext.
-- Write room, member, user-session, active-room, and empty-room indexes as documented.
+- Write room, member-index, member-detail, user-session, active-room, and empty-room indexes as documented.
 - Assign initial owner on create.
 - Transfer owner by earliest `joinedAt` when current owner leaves.
 - Move room to `EMPTY` and set `emptySince` when the last member leaves.
@@ -302,9 +303,9 @@ Room is the core aggregate. This card establishes the MVP's room lifecycle befor
 
 ### Acceptance Criteria
 
-- Create room writes `Room`, creator `RoomMember`, creator `UserSession.currentRoomId`, and `drrr:room:active`.
+- Create room writes `Room`, creator member index, creator `RoomMember` detail, creator `UserSession.currentRoomId`, and `drrr:room:active`.
 - Join room rejects full, expired, password-invalid, duplicate nickname, and banned users.
-- Leave room clears user room context and removes membership.
+- Leave room clears user room context and removes both member index and member detail.
 - Owner transfer selects earliest remaining `joinedAt`.
 - Last member leaving sets room `EMPTY` and writes `drrr:room:empty`.
 - Tests cover create, join, leave, owner transfer, and empty transition.
@@ -505,8 +506,8 @@ Implement mute, kick, and Ban operations with owner permission checks, Redis gov
 - Check target exists where required.
 - Write mute ZSet and mute detail record.
 - Write ban Set and ban detail record.
-- Kick clears target `currentRoomId`, removes membership, and blocks old `roomId` auto-reconnect.
-- Ban removes target from room if present and prevents future join.
+- Kick clears target `currentRoomId`, removes both member index and member detail, and blocks old `roomId` auto-reconnect.
+- Ban removes target from room if present, clears both member index and member detail, and prevents future join.
 - Emit `USER_MUTED`, `USER_KICKED`, `USER_BANNED`, and any resulting `OWNER_TRANSFER` or `ROOM_EMPTY`.
 - Notify target connection where applicable.
 
@@ -703,4 +704,6 @@ Frontend work is intentionally deferred. After backend MVP integration passes, P
 - WebSocket reconnect UI.
 - Export action.
 - End-to-end browser verification.
+
+
 

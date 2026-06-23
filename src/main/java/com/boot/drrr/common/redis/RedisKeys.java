@@ -22,6 +22,10 @@ public final class RedisKeys {
         return PREFIX + "room:members:" + roomId;
     }
 
+    public static String roomMemberDetail(String roomId) {
+        return PREFIX + "room:member-detail:" + roomId;
+    }
+
     public static String roomMessages(String roomId) {
         return PREFIX + "room:messages:" + roomId;
     }
