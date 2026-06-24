@@ -2,59 +2,49 @@
 
 ## Active Card
 
-Title: Card 05: Implement Room Creation, Join, Leave, and Owner Transfer
+Title: Card 06: Implement WebSocket Connection Infrastructure
 
 Status:
-Review-fix round completed. Original Card 05 implementation was blocked by Planner review on same-user cross-room join concurrency and inherited-owner config permission semantics. Both blockers are resolved in this round.
+Implemented and verified in the backend workspace. This round adds room-scoped WebSocket handshake validation, single-node live-connection tracking, room broadcast/direct push helpers, disconnect-to-RECONNECTING state transition, and documented `ERROR` envelope behavior for handled inbound message failures.
 
 Goal:
-Implement the core room lifecycle: create room, join room, leave room, room metadata update, owner assignment, owner inheritance, and ACTIVE/EMPTY transitions, then harden the write path so user-room context cannot diverge under concurrent joins and inherited owner config permissions match the documented contract.
+Implement `/ws/rooms/{roomId}` connection validation, in-memory connection registry, room broadcast, direct push, disconnect callback, and WebSocket error envelope while keeping Redis authoritative for room and user state.
 
 Files Involved:
-- `src/main/java/com/boot/drrr/common/lock/**`
-- `src/main/java/com/boot/drrr/domain/room/Room.java`
-- `src/main/java/com/boot/drrr/service/room/**`
-- `src/main/java/com/boot/drrr/service/owner/**`
-- `src/main/java/com/boot/drrr/web/controller/RoomController.java`
-- `src/main/java/com/boot/drrr/web/dto/room/**`
-- `src/test/java/com/boot/drrr/common/JvmRoomLockTest.java`
-- `src/test/java/com/boot/drrr/domain/DomainJsonCodecTest.java`
-- `src/test/java/com/boot/drrr/repository/RedisRepositoryIntegrationTest.java`
-- `src/test/java/com/boot/drrr/service/lobby/LobbyServiceTest.java`
-- `src/test/java/com/boot/drrr/service/room/**`
-- `src/test/java/com/boot/drrr/service/owner/**`
-- `src/test/java/com/boot/drrr/web/controller/RoomControllerTest.java`
+- `src/main/java/com/boot/drrr/config/WebSocketConfig.java`
+- `src/main/java/com/boot/drrr/service/user/RoomSessionContext.java`
+- `src/main/java/com/boot/drrr/service/user/UserSessionService.java`
+- `src/main/java/com/boot/drrr/repository/room/RoomMemberRepository.java`
+- `src/main/java/com/boot/drrr/ws/**`
+- `src/test/java/com/boot/drrr/service/user/UserSessionServiceTest.java`
+- `src/test/java/com/boot/drrr/web/controller/SessionControllerTest.java`
+- `src/test/java/com/boot/drrr/ws/**`
 - `docs/builder/card_repo.md`
 
-Reviewer Blockers Addressed:
-- `joinRoom` no longer locks only by `roomId`. Room lifecycle mutations now use a shared deterministic multi-key lock policy covering the acting user and target room.
-- `updateRoom` no longer treats all owners identically. `Room` now persists `initialOwnerUserId`, and inherited owners are blocked with `CONFIG_LOCKED` when `allowOwnerConfigChange=false`.
-
 Implemented Changes:
-- Extended `Room` persistence/read models with `initialOwnerUserId` and exposed it through `RoomResponse`.
-- Updated create-room to set both `ownerUserId` and `initialOwnerUserId` to the creator.
-- Updated join/leave/owner-repair/update flows to preserve `initialOwnerUserId` across room state transitions.
-- Extended `RoomLock` and `JvmRoomLock` with deterministic multi-key locking based on sorted distinct keys, plus automatic cleanup after execution.
-- Replaced ad hoc single-key room locking in `RoomService` with a shared helper that locks `user:{userId}` and `room:{roomId}` where applicable.
-- Enforced documented config-lock behavior in `updateRoom`: current owner is still required, and inherited owners now receive `CONFIG_LOCKED` when room config changes are locked.
-- Updated regression coverage for JSON codec, Redis repository round-trip, lobby room fixtures, lock behavior, controller envelopes, and room service lifecycle/concurrency behavior.
+- Registered `/ws/rooms/{roomId}` through `WebSocketConfig` and attached a handshake interceptor plus room text handler.
+- Added handshake-time validation for `userId`, `UserSession.currentRoomId`, room existence/expiry, member-order index presence, and member-detail presence before the connection is accepted.
+- Extended `UserSessionService` with room-connection validation, connect-time ONLINE refresh, disconnect-time RECONNECTING transition, and `drrr:user:reconnecting` write-through.
+- Extended `RoomMemberRepository` with a direct membership-order existence check so the WebSocket layer can validate both documented Redis membership structures.
+- Added a single-node in-memory registry that tracks both `roomId -> userId -> WebSocketSession` and `sessionId -> (roomId, userId)`.
+- Added reusable room broadcast and user-targeted push helpers that serialize documented outbound envelopes.
+- Added handled inbound-message failure behavior that returns the documented `ERROR` envelope only to the requesting connection.
+- Added focused unit tests for the registry, push helpers, handshake validation wiring, handler error envelope behavior, and reconnecting session/member transition coverage.
 
 Verification Run:
 - Executed with Java 21:
   - `JAVA_HOME=D:\work\language\Java\21`
   - `PATH=D:\work\language\Java\21\bin;%PATH%`
-  - `./mvnw.cmd -q "-Dtest=JvmRoomLockTest,DomainJsonCodecTest,RedisRepositoryIntegrationTest,LobbyServiceTest,OwnerTransferServiceTest,RoomServiceTest,RoomControllerTest" test`
+  - `./mvnw.cmd -q "-Dtest=UserSessionServiceTest,RoomWebSocketConnectionRegistryTest,RoomWebSocketOperationsTest,RoomWebSocketHandlerAndHandshakeTest" test`
 - Result: passed.
 - Verified by tests:
-  - Room create persists `initialOwnerUserId` with the creator and still hashes passwords.
-  - Same user cannot successfully join two rooms concurrently; only one join wins and user session/member state remain single-room consistent.
-  - Owner transfer still selects earliest remaining `joinedAt` and preserves the initial owner marker.
-  - Last-member leave still transitions room to `EMPTY` and writes the empty-room index.
-  - Initial owner may update locked config; inherited owner may update only when `allowOwnerConfigChange=true`; otherwise `CONFIG_LOCKED` is returned.
-  - Room JSON and repository serialization round-trip the new `initialOwnerUserId` field.
-  - Multi-key JVM lock ordering does not deadlock and releases lock entries after execution.
+  - Invalid room context is rejected at handshake time and does not receive room-scoped attributes.
+  - Accepted connections are registered by room, user, and session id.
+  - Broadcast reaches only sessions in the target room; direct push reaches only the targeted user session.
+  - Disconnect transitions the user session and room member to `RECONNECTING` and records the user in `drrr:user:reconnecting`.
+  - Unsupported/handled inbound WebSocket requests return the documented `ERROR` envelope back only to the originating session.
 
 Scope Guard:
-This round stays inside Card 05 review-fix scope. It does not add WebSocket broadcasts, chat message persistence, room event writes, cleanup scheduling, governance commands, reconnect flow changes, or distributed locking infrastructure.
+This round stays inside Card 06 transport/routing infrastructure. It does not implement public/direct chat semantics, reconnect state replay, frontend reconnect UX, multi-instance registry coordination, pub/sub fan-out, or any new business message type handling beyond returning documented `ERROR` envelopes for handled failures.
 
 ready-for-closeout: yes

@@ -61,6 +61,10 @@ public class RoomMemberRepository {
         return redisOps.decodeOptional((String) rawValue, RoomMember.class);
     }
 
+    public boolean existsMemberOrder(String roomId, String userId) {
+        return redisOps.zsets().score(RedisKeys.roomMembers(roomId), userId) != null;
+    }
+
     public List<RoomMember> listMembers(String roomId) {
         var userIds = redisOps.zsets().range(RedisKeys.roomMembers(roomId), 0, -1);
         if (userIds == null || userIds.isEmpty()) {

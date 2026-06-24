@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.boot.drrr.common.error.GlobalExceptionHandler;
+import com.boot.drrr.config.DrrrProperties;
 import com.boot.drrr.domain.user.UserSession;
 import com.boot.drrr.domain.user.UserStatus;
 import com.boot.drrr.service.user.UserSessionService;
@@ -26,7 +27,7 @@ class SessionControllerTest {
     @Test
     void createSessionReturnsDocumentedEnvelope() throws Exception {
         validator.afterPropertiesSet();
-        UserSessionService service = new UserSessionService(null, null, null, null) {
+        UserSessionService service = new UserSessionService(null, null, null, null, null, null, new DrrrProperties()) {
             @Override
             public UserSession createAnonymousSession(String nickname) {
                 return new UserSession(
@@ -63,7 +64,7 @@ class SessionControllerTest {
     @Test
     void createSessionRejectsBlankNicknameWithInvalidRequestEnvelope() throws Exception {
         validator.afterPropertiesSet();
-        UserSessionService service = new UserSessionService(null, null, null, null);
+        UserSessionService service = new UserSessionService(null, null, null, null, null, null, new DrrrProperties());
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(new SessionController(service))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setValidator(validator)
