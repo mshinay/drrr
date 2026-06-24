@@ -113,6 +113,7 @@ class RedisRepositoryIntegrationTest extends AbstractRedisRepositoryTest {
                 "hashed-password",
                 10,
                 "u_owner",
+                "u_owner",
                 RoomStatus.ACTIVE,
                 true,
                 new HistoryStrategy(HistoryStrategyType.COUNT, 50),
@@ -284,6 +285,7 @@ class RedisRepositoryIntegrationTest extends AbstractRedisRepositoryTest {
         assertThat(governanceRepository.hasBanIndexEntry("r_1", "u_3")).isFalse();
     }
 }
+
 
 
 

@@ -2,80 +2,59 @@
 
 ## Active Card
 
-Title: Card 04: Implement User Session and Lobby APIs
+Title: Card 05: Implement Room Creation, Join, Leave, and Owner Transfer
+
+Status:
+Review-fix round completed. Original Card 05 implementation was blocked by Planner review on same-user cross-room join concurrency and inherited-owner config permission semantics. Both blockers are resolved in this round.
 
 Goal:
-Implement anonymous session creation and lobby data retrieval as the first user-visible HTTP slice.
+Implement the core room lifecycle: create room, join room, leave room, room metadata update, owner assignment, owner inheritance, and ACTIVE/EMPTY transitions, then harden the write path so user-room context cannot diverge under concurrent joins and inherited owner config permissions match the documented contract.
 
 Files Involved:
-- `src/main/java/com/boot/drrr/service/user/**`
-- `src/main/java/com/boot/drrr/service/lobby/**`
-- `src/main/java/com/boot/drrr/web/controller/SessionController.java`
-- `src/main/java/com/boot/drrr/web/controller/LobbyController.java`
-- `src/main/java/com/boot/drrr/web/dto/**`
-- `src/test/java/com/boot/drrr/service/user/**`
-- `src/test/java/com/boot/drrr/service/lobby/**`
-- `src/test/java/com/boot/drrr/web/controller/**`
+- `src/main/java/com/boot/drrr/common/lock/**`
+- `src/main/java/com/boot/drrr/domain/room/Room.java`
+- `src/main/java/com/boot/drrr/service/room/**`
+- `src/main/java/com/boot/drrr/service/owner/**`
+- `src/main/java/com/boot/drrr/web/controller/RoomController.java`
+- `src/main/java/com/boot/drrr/web/dto/room/**`
+- `src/test/java/com/boot/drrr/common/JvmRoomLockTest.java`
+- `src/test/java/com/boot/drrr/domain/DomainJsonCodecTest.java`
+- `src/test/java/com/boot/drrr/repository/RedisRepositoryIntegrationTest.java`
+- `src/test/java/com/boot/drrr/service/lobby/LobbyServiceTest.java`
+- `src/test/java/com/boot/drrr/service/room/**`
+- `src/test/java/com/boot/drrr/service/owner/**`
+- `src/test/java/com/boot/drrr/web/controller/RoomControllerTest.java`
 - `docs/builder/card_repo.md`
 
-Required Changes:
-- Implemented `POST /api/sessions`.
-- Implemented `GET /api/lobby`.
-- Created anonymous `UserSession` with generated `userId`, trimmed nickname, `ONLINE` status, timestamps, and no room.
-- Wrote `drrr:user:{userId}` through `UserSessionRepository`.
-- Updated `drrr:lobby:active-users` on session creation.
-- Counted active users within the configured 5-minute window through injectable time.
-- Read active rooms and member counts to build lobby room cards.
-- Supported MVP lobby sorting fields `LAST_ACTIVE`, `MEMBER_COUNT`, and `SURVIVAL_TIME`, with invalid query values falling back to `LAST_ACTIVE` per design.
+Reviewer Blockers Addressed:
+- `joinRoom` no longer locks only by `roomId`. Room lifecycle mutations now use a shared deterministic multi-key lock policy covering the acting user and target room.
+- `updateRoom` no longer treats all owners identically. `Room` now persists `initialOwnerUserId`, and inherited owners are blocked with `CONFIG_LOCKED` when `allowOwnerConfigChange=false`.
 
-Reference Intent:
-Users enter the MVP through nickname-only anonymous sessions and a lobby showing recent active users plus rooms.
+Implemented Changes:
+- Extended `Room` persistence/read models with `initialOwnerUserId` and exposed it through `RoomResponse`.
+- Updated create-room to set both `ownerUserId` and `initialOwnerUserId` to the creator.
+- Updated join/leave/owner-repair/update flows to preserve `initialOwnerUserId` across room state transitions.
+- Extended `RoomLock` and `JvmRoomLock` with deterministic multi-key locking based on sorted distinct keys, plus automatic cleanup after execution.
+- Replaced ad hoc single-key room locking in `RoomService` with a shared helper that locks `user:{userId}` and `room:{roomId}` where applicable.
+- Enforced documented config-lock behavior in `updateRoom`: current owner is still required, and inherited owners now receive `CONFIG_LOCKED` when room config changes are locked.
+- Updated regression coverage for JSON codec, Redis repository round-trip, lobby room fixtures, lock behavior, controller envelopes, and room service lifecycle/concurrency behavior.
 
-Non-goals:
-- No room creation or join flow was implemented.
-- No WebSocket behavior was implemented.
-- No frontend was implemented.
-- No authentication or account system was added.
-
-## Changed Files
-
-- `src/main/java/com/boot/drrr/service/user/UserSessionService.java`: added anonymous session creation, Redis session persistence, and lobby activity index update.
-- `src/main/java/com/boot/drrr/service/lobby/LobbyService.java`: added lobby aggregation, active-user window counting, batch room/member loading, dirty-room filtering, and MVP sorting behavior that preserves Redis ZSet order for `LAST_ACTIVE`.
-- `src/main/java/com/boot/drrr/service/lobby/LobbySort.java`: added lobby sort parsing with default fallback.
-- `src/main/java/com/boot/drrr/service/lobby/LobbyView.java`: added service-layer lobby response model.
-- `src/main/java/com/boot/drrr/web/controller/SessionController.java`: exposed `POST /api/sessions` with the shared API envelope.
-- `src/main/java/com/boot/drrr/web/controller/LobbyController.java`: exposed `GET /api/lobby` with sort parsing and the shared API envelope.
-- `src/main/java/com/boot/drrr/web/dto/CreateSessionRequest.java`: added validated nickname-only session request DTO.
-- `src/main/java/com/boot/drrr/web/dto/SessionResponse.java`: added API response DTO for anonymous session creation.
-- `src/main/java/com/boot/drrr/web/dto/LobbyResponse.java`: added API response DTO for lobby active counts and room cards.
-- `src/test/java/com/boot/drrr/service/user/UserSessionServiceTest.java`: covered session creation side effects and generated payload shape.
-- `src/test/java/com/boot/drrr/service/lobby/LobbyServiceTest.java`: covered 5-minute active counting, dirty-room filtering, batch repository usage, Redis-order preservation for `LAST_ACTIVE`, and the three supported sort modes.
-- `src/test/java/com/boot/drrr/web/controller/SessionControllerTest.java`: covered session HTTP envelope success and invalid nickname behavior.
-- `src/test/java/com/boot/drrr/web/controller/LobbyControllerTest.java`: covered lobby HTTP envelope success and invalid sort fallback behavior.
-
-## Verification Run
-
+Verification Run:
 - Executed with Java 21:
   - `JAVA_HOME=D:\work\language\Java\21`
   - `PATH=D:\work\language\Java\21\bin;%PATH%`
-  - `./mvnw.cmd -q "-Dtest=UserSessionServiceTest,LobbyServiceTest,SessionControllerTest,LobbyControllerTest" test`
+  - `./mvnw.cmd -q "-Dtest=JvmRoomLockTest,DomainJsonCodecTest,RedisRepositoryIntegrationTest,LobbyServiceTest,OwnerTransferServiceTest,RoomServiceTest,RoomControllerTest" test`
 - Result: passed.
 - Verified by tests:
-  - Session creation persists `UserSession` and updates `drrr:lobby:active-users`.
-  - Lobby active count uses the configured 5-minute time window via injectable time.
-  - Lobby room summaries batch-read room metadata plus member counts, ignore dirty room indexes, and preserve Redis ordering for `LAST_ACTIVE`.
-  - Lobby sorting matches MVP fields `LAST_ACTIVE`, `MEMBER_COUNT`, and `SURVIVAL_TIME`.
-  - HTTP endpoints return the documented success envelope.
-  - Blank nickname returns the documented `INVALID_REQUEST` envelope.
-  - Unknown lobby sort falls back to `LAST_ACTIVE` instead of failing the request.
+  - Room create persists `initialOwnerUserId` with the creator and still hashes passwords.
+  - Same user cannot successfully join two rooms concurrently; only one join wins and user session/member state remain single-room consistent.
+  - Owner transfer still selects earliest remaining `joinedAt` and preserves the initial owner marker.
+  - Last-member leave still transitions room to `EMPTY` and writes the empty-room index.
+  - Initial owner may update locked config; inherited owner may update only when `allowOwnerConfigChange=true`; otherwise `CONFIG_LOCKED` is returned.
+  - Room JSON and repository serialization round-trip the new `initialOwnerUserId` field.
+  - Multi-key JVM lock ordering does not deadlock and releases lock entries after execution.
 
-## Scope Guard
-
-This card only adds the first HTTP slice for anonymous session creation and lobby read APIs on top of the existing repository layer. It does not introduce room workflows, reconnect flows, WebSocket handling, pagination, or new Redis keys.
-
-## Next Step
-
-The next backend card can build room creation and room join workflows on top of the new session and lobby entry points.
+Scope Guard:
+This round stays inside Card 05 review-fix scope. It does not add WebSocket broadcasts, chat message persistence, room event writes, cleanup scheduling, governance commands, reconnect flow changes, or distributed locking infrastructure.
 
 ready-for-closeout: yes
-

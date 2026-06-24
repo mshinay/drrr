@@ -7,6 +7,7 @@ public record Room(
         String passwordHash,
         int maxMembers,
         String ownerUserId,
+        String initialOwnerUserId,
         RoomStatus status,
         boolean userListVisible,
         HistoryStrategy historyStrategy,

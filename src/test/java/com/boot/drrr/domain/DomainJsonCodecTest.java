@@ -64,6 +64,7 @@ class DomainJsonCodecTest {
                 "hashed-password",
                 10,
                 "u_owner",
+                "u_owner",
                 RoomStatus.ACTIVE,
                 true,
                 new HistoryStrategy(HistoryStrategyType.COUNT, 50),
@@ -78,6 +79,7 @@ class DomainJsonCodecTest {
 
         assertThat(decoded).isEqualTo(room);
         assertThat(json).contains("\"passwordHash\":\"hashed-password\"");
+        assertThat(json).contains("\"initialOwnerUserId\":\"u_owner\"");
         assertThat(json).doesNotContain("hasPassword");
         assertThat(json).contains("\"type\":\"COUNT\"");
         assertThat(json).contains("\"status\":\"ACTIVE\"");
@@ -193,3 +195,4 @@ class DomainJsonCodecTest {
         assertThat(json).contains("\"bannedAt\":1717300200000");
     }
 }
+

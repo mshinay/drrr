@@ -116,6 +116,7 @@ class LobbyServiceTest {
                 null,
                 maxMembers,
                 "u_owner",
+                "u_owner",
                 RoomStatus.ACTIVE,
                 true,
                 new HistoryStrategy(HistoryStrategyType.COUNT, 20),
@@ -237,4 +238,5 @@ class LobbyServiceTest {
         }
     }
 }
+
 
