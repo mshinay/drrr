@@ -2,61 +2,54 @@
 
 ## Active Card
 
-Title: Card 09: Implement Governance Commands
+Title: Card 10: Implement Cleanup Scheduler
 
 Status:
 Implemented and verified in the backend workspace.
 
 Goal:
-Implement owner-only mute, kick, and ban commands with Redis governance records, room-event/system-message generation, kick/ban target notification, and chat/join enforcement that matches the current MVP contract.
+Implement scheduled cleanup for reconnect timeout, empty-room expiry, and complete room runtime-data deletion so Redis runtime state follows the MVP lifecycle contract.
 
 Files Involved:
-- `src/main/java/com/boot/drrr/service/governance/GovernanceService.java`
-- `src/main/java/com/boot/drrr/service/governance/MuteMemberCommand.java`
-- `src/main/java/com/boot/drrr/service/governance/KickMemberCommand.java`
-- `src/main/java/com/boot/drrr/service/governance/BanMemberCommand.java`
-- `src/main/java/com/boot/drrr/service/governance/MuteMemberResult.java`
-- `src/main/java/com/boot/drrr/service/governance/KickMemberResult.java`
-- `src/main/java/com/boot/drrr/service/governance/BanMemberResult.java`
+- `src/main/java/com/boot/drrr/config/FoundationConfig.java`
+- `src/main/resources/application.yaml`
+- `src/main/java/com/boot/drrr/service/cleanup/CleanupService.java`
+- `src/main/java/com/boot/drrr/service/cleanup/CleanupScheduler.java`
 - `src/main/java/com/boot/drrr/service/event/RoomEventService.java`
-- `src/main/java/com/boot/drrr/web/controller/GovernanceController.java`
-- `src/main/java/com/boot/drrr/web/dto/governance/MuteMemberRequest.java`
-- `src/main/java/com/boot/drrr/web/dto/governance/MuteMemberResponse.java`
-- `src/main/java/com/boot/drrr/web/dto/governance/KickMemberRequest.java`
-- `src/main/java/com/boot/drrr/web/dto/governance/KickMemberResponse.java`
-- `src/main/java/com/boot/drrr/web/dto/governance/BanMemberRequest.java`
-- `src/main/java/com/boot/drrr/web/dto/governance/BanMemberResponse.java`
-- `src/test/java/com/boot/drrr/service/governance/GovernanceServiceTest.java`
-- `src/test/java/com/boot/drrr/web/controller/GovernanceControllerTest.java`
+- `src/main/java/com/boot/drrr/repository/governance/GovernanceRepository.java`
+- `src/main/java/com/boot/drrr/ws/RoomWebSocketConnectionRegistry.java`
+- `src/main/java/com/boot/drrr/ws/RoomWebSocketOperations.java`
+- `src/main/java/com/boot/drrr/ws/RoomRemovedPayload.java`
+- `src/test/java/com/boot/drrr/service/cleanup/CleanupServiceTest.java`
 - `docs/builder/card_repo.md`
 
 Implementation Scope:
-- Added `GovernanceService` as the owner-checked application entry for `muteMember(...)`, `kickMember(...)`, and `banMember(...)`.
-- Implemented `POST /api/rooms/{roomId}/members/{targetUserId}/mute`, `/kick`, and `/ban` through `GovernanceController` and dedicated governance DTOs.
-- Persisted mute runtime state through the existing governance Redis repository using the documented ZSet + detail key pair.
-- Persisted ban runtime state through the existing governance Redis repository using the documented Set + detail key pair.
-- Enforced owner-only governance by requiring the operator to be the current room owner member before any mutation runs.
-- Required target membership for mute and kick, and required target user existence for ban so offline users can still be banned.
-- Cleared kicked/banned users from the room member structures, cleared `currentRoomId`, removed reconnecting markers, and kept kicked users rejoinable when they are not banned.
-- Reused existing join-time ban enforcement and existing send-time mute enforcement so governance immediately affects chat and room entry behavior.
-- Extended `RoomEventService` to record `USER_MUTED`, `USER_KICKED`, and `USER_BANNED`, generate matching `SYSTEM` messages, and include the kicked/banned target in event/message visibility where required.
-- Kept unrelated pre-existing doc edits in `doc/*.md` and `docs/planner/builder-task-cards.md` untouched.
+- Enabled Spring scheduling in the foundation config and wired two cleanup jobs for reconnect-timeout scans and empty-room expiry scans.
+- Added `CleanupService` to scan `drrr:user:reconnecting` for users older than the configured 5-minute reconnect timeout and move them to `OFFLINE` with `currentRoomId=null`.
+- Reused room lifecycle rules during reconnect-timeout cleanup so member removal, owner transfer, `EMPTY` transitions, `drrr:room:empty`, and room leave events stay aligned with the current MVP behavior.
+- Added empty-room expiry cleanup that scans `drrr:room:empty`, verifies the room is still expired under the 24-hour window, records `ROOM_EXPIRED` when stale connections still exist, and then deletes all room runtime keys.
+- Completed runtime deletion by removing room data, member data, message/event lists, mute/ban indexes, mute/ban detail keys, and room active/empty indexes.
+- Added WebSocket support to enumerate room-bound stale connections, push `ROOM_REMOVED { reason: EXPIRED }`, and close those room sessions after expiry cleanup.
+- Extended `RoomEventService` so `ROOM_EXPIRED` can emit its event/system-message flow to stale recipients before the room runtime keys are deleted.
+- Left the pre-existing unrelated edits in `doc/api-spec.md`, `doc/backend-foundation.md`, `doc/detailed-design.md`, and `docs/planner/builder-task-cards.md` untouched.
 
 Verification Run:
 - Executed with Java 21:
   - `JAVA_HOME=D:\work\language\Java\21`
   - `PATH=D:\work\language\Java\21\bin;%PATH%`
-  - `./mvnw.cmd -q "-Dtest=GovernanceServiceTest,GovernanceControllerTest,RoomEventServiceTest,MessageServiceTest,RoomServiceTest" test`
+  - `./mvnw.cmd -q "-Dtest=CleanupServiceTest" test`
+  - `./mvnw.cmd -q "-Dtest=CleanupServiceTest,RoomEventServiceTest,RoomServiceTest,GovernanceServiceTest,MessageServiceTest,UserSessionServiceTest" test`
 - Result: passed.
 
 Acceptance Coverage:
-- Non-owner governance requests fail with `FORBIDDEN`.
-- Muted users are blocked from both public and direct messages until the mute expires.
-- Kicked users lose room membership, lose reconnect recovery for the old room, and can rejoin when not banned.
-- Banned users are removed when present, remain banned on repeated ban calls, and cannot rejoin the room.
-- Governance actions append matching `RoomEvent` entries, generate matching `SYSTEM` messages, and notify the kicked/banned target connection when it still exists.
+- Reconnecting users older than 5 minutes are removed from room membership, removed from `drrr:user:reconnecting`, and persisted as `OFFLINE` with no current room.
+- Owner transfer and empty-room transitions still occur when timed-out reconnecting users leave behind active members or no members.
+- Empty rooms older than 24 hours are expired and fully deleted.
+- Room expiry deletes the documented runtime keys and both active/empty indexes, including mute/ban detail keys.
+- Tests use injectable time to verify both the 5-minute reconnect timeout and the 24-hour empty-room expiry window.
+- Stale room-bound WebSocket connections receive `ROOM_EXPIRED`/system-message delivery when observable, then receive `ROOM_REMOVED` before the cleanup closes the sessions.
 
 Scope Guard:
-This card stays within governance command delivery plus the required event/message integration. It does not introduce moderator roles, temporary bans, or new persistence beyond the documented Redis runtime records and `RoomEvent` history.
+This card stays within scheduled runtime cleanup and lifecycle deletion. It does not add tombstones, historical export retention, distributed locking, or admin cleanup endpoints.
 
 ready-for-closeout: yes

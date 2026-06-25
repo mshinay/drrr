@@ -140,6 +140,12 @@ public class RoomEventService {
         return recordEvent(room, RoomEventType.ROOM_EMPTY, null, null, payload, List.of());
     }
 
+    public RoomEvent recordRoomExpired(Room room, long expiredAt, List<String> additionalRecipients) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("expiredAt", expiredAt);
+        return recordEvent(room, RoomEventType.ROOM_EXPIRED, null, null, payload, additionalRecipients);
+    }
+
     public Message createRoomConfigSystemMessage(Room room, String operatorUserId, String operatorNickname) {
         validateRoom(room);
         long now = timeProvider.nowMillis();
@@ -217,7 +223,10 @@ public class RoomEventService {
 
     private List<String> resolveVisibleRecipients(String roomId, RoomEventType type, List<String> additionalRecipients) {
         LinkedHashSet<String> recipients = new LinkedHashSet<>(resolveOnlineRecipients(roomId));
-        if (type == RoomEventType.USER_KICKED || type == RoomEventType.USER_BANNED || type == RoomEventType.ROOM_EMPTY) {
+        if (type == RoomEventType.USER_KICKED
+                || type == RoomEventType.USER_BANNED
+                || type == RoomEventType.ROOM_EMPTY
+                || type == RoomEventType.ROOM_EXPIRED) {
             addRecipients(recipients, additionalRecipients);
         }
         return List.copyOf(recipients);
@@ -244,7 +253,7 @@ public class RoomEventService {
     }
 
     private boolean shouldCreateSystemMessage(RoomEventType type, List<String> visibleTo) {
-        if (type == RoomEventType.ROOM_EMPTY) {
+        if (type == RoomEventType.ROOM_EMPTY || type == RoomEventType.ROOM_EXPIRED) {
             return !visibleTo.isEmpty();
         }
         return true;
@@ -290,9 +299,7 @@ public class RoomEventService {
             case USER_KICKED -> nicknameFromPayload(event.payload(), event.targetUserId()) + " was kicked from the room.";
             case USER_BANNED -> nicknameFromPayload(event.payload(), event.targetUserId()) + " was banned from the room.";
             case ROOM_EMPTY -> "The room is now empty.";
-            case ROOM_EXPIRED -> throw new IllegalArgumentException(
-                    "event type is outside current card scope: " + event.type()
-            );
+            case ROOM_EXPIRED -> "The room expired and was removed.";
         };
     }
 

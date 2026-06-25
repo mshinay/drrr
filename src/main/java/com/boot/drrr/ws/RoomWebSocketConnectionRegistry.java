@@ -58,4 +58,12 @@ public class RoomWebSocketConnectionRegistry {
         }
         return new ArrayList<>(sessions.values());
     }
+
+    public List<String> listRoomUserIds(String roomId) {
+        ConcurrentMap<String, WebSocketSession> sessions = roomSessions.get(roomId);
+        if (sessions == null || sessions.isEmpty()) {
+            return List.of();
+        }
+        return new ArrayList<>(sessions.keySet());
+    }
 }

@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.util.LinkedHashSet;
 import java.util.List;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -56,6 +57,13 @@ public class RoomWebSocketOperations {
         }
     }
 
+    public void closeRoomSessions(String roomId) {
+        List<WebSocketSession> sessions = registry.listRoomSessions(roomId);
+        for (WebSocketSession session : sessions) {
+            close(session);
+        }
+    }
+
     public void pushError(WebSocketSession session, String requestId, BusinessException exception) {
         send(session, new WsOutboundMessage<>(
                 "ERROR",
@@ -76,6 +84,17 @@ public class RoomWebSocketOperations {
             session.sendMessage(new TextMessage(jsonCodec.encode(message)));
         } catch (IOException exception) {
             throw new IllegalStateException("failed to send websocket message", exception);
+        }
+    }
+
+    private void close(WebSocketSession session) {
+        if (session == null || !session.isOpen()) {
+            return;
+        }
+        try {
+            session.close(CloseStatus.NORMAL);
+        } catch (IOException exception) {
+            throw new IllegalStateException("failed to close websocket session", exception);
         }
     }
 }

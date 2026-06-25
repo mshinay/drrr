@@ -16,5 +16,8 @@ drrr:
     empty-expiry: 24h
     max-members-min: 1
     max-members-max: 20
+  cleanup:
+    reconnect-scan-fixed-delay-ms: 60000
+    empty-room-scan-fixed-delay-ms: 60000
   websocket:
     endpoint: /ws/rooms

@@ -51,6 +51,9 @@ public class GovernanceRepository {
     }
 
     public void deleteMuteState(String roomId) {
+        for (String userId : listMutedUserIdsByScore(roomId, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY)) {
+            redisOps.deleteKey(RedisKeys.roomMuteDetail(roomId, userId));
+        }
         redisOps.deleteKey(RedisKeys.roomMute(roomId));
     }
 
@@ -85,6 +88,9 @@ public class GovernanceRepository {
     }
 
     public void deleteBanState(String roomId) {
+        for (String userId : listBanUserIds(roomId)) {
+            redisOps.deleteKey(RedisKeys.roomBanDetail(roomId, userId));
+        }
         redisOps.deleteKey(RedisKeys.roomBan(roomId));
     }
 }
