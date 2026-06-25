@@ -59,40 +59,85 @@ public class RoomEventService {
     public RoomEvent recordUserJoin(Room room, RoomMember joinedMember) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("nickname", joinedMember.nickname());
-        return recordEvent(room, RoomEventType.USER_JOIN, joinedMember.userId(), joinedMember.userId(), payload);
+        return recordEvent(room, RoomEventType.USER_JOIN, joinedMember.userId(), joinedMember.userId(), payload, List.of());
     }
 
     public RoomEvent recordUserLeave(Room room, RoomMember leavingMember) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("nickname", leavingMember.nickname());
-        return recordEvent(room, RoomEventType.USER_LEAVE, leavingMember.userId(), leavingMember.userId(), payload);
+        return recordEvent(room, RoomEventType.USER_LEAVE, leavingMember.userId(), leavingMember.userId(), payload, List.of());
     }
 
     public RoomEvent recordUserReconnecting(Room room, RoomMember reconnectingMember, long lastDisconnectedAt) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("nickname", reconnectingMember.nickname());
         payload.put("lastDisconnectedAt", lastDisconnectedAt);
-        return recordEvent(room, RoomEventType.USER_RECONNECTING, reconnectingMember.userId(), reconnectingMember.userId(), payload);
+        return recordEvent(room, RoomEventType.USER_RECONNECTING, reconnectingMember.userId(), reconnectingMember.userId(), payload, List.of());
     }
 
     public RoomEvent recordUserReconnected(Room room, RoomMember reconnectedMember, long reconnectedAt) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("nickname", reconnectedMember.nickname());
         payload.put("reconnectedAt", reconnectedAt);
-        return recordEvent(room, RoomEventType.USER_RECONNECTED, reconnectedMember.userId(), reconnectedMember.userId(), payload);
+        return recordEvent(room, RoomEventType.USER_RECONNECTED, reconnectedMember.userId(), reconnectedMember.userId(), payload, List.of());
     }
 
     public RoomEvent recordOwnerTransfer(Room room, String fromUserId, String toUserId) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("fromUserId", fromUserId);
         payload.put("toUserId", toUserId);
-        return recordEvent(room, RoomEventType.OWNER_TRANSFER, fromUserId, toUserId, payload);
+        return recordEvent(room, RoomEventType.OWNER_TRANSFER, fromUserId, toUserId, payload, List.of());
+    }
+
+    public RoomEvent recordUserMuted(
+            Room room,
+            String operatorUserId,
+            String targetUserId,
+            String targetNickname,
+            int durationMinutes,
+            long endAt,
+            String reason
+    ) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("nickname", targetNickname);
+        payload.put("durationMinutes", durationMinutes);
+        payload.put("endAt", endAt);
+        putOptionalText(payload, "reason", reason);
+        return recordEvent(room, RoomEventType.USER_MUTED, operatorUserId, targetUserId, payload, List.of());
+    }
+
+    public RoomEvent recordUserKicked(
+            Room room,
+            String operatorUserId,
+            String targetUserId,
+            String targetNickname,
+            String reason
+    ) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("nickname", targetNickname);
+        putOptionalText(payload, "reason", reason);
+        return recordEvent(room, RoomEventType.USER_KICKED, operatorUserId, targetUserId, payload, List.of(targetUserId));
+    }
+
+    public RoomEvent recordUserBanned(
+            Room room,
+            String operatorUserId,
+            String targetUserId,
+            String targetNickname,
+            String reason,
+            long bannedAt
+    ) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("nickname", targetNickname);
+        payload.put("bannedAt", bannedAt);
+        putOptionalText(payload, "reason", reason);
+        return recordEvent(room, RoomEventType.USER_BANNED, operatorUserId, targetUserId, payload, List.of(targetUserId));
     }
 
     public RoomEvent recordRoomEmpty(Room room, long emptySince) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("emptySince", emptySince);
-        return recordEvent(room, RoomEventType.ROOM_EMPTY, null, null, payload);
+        return recordEvent(room, RoomEventType.ROOM_EMPTY, null, null, payload, List.of());
     }
 
     public Message createRoomConfigSystemMessage(Room room, String operatorUserId, String operatorNickname) {
@@ -125,7 +170,14 @@ public class RoomEventService {
         return roomEventRepository.listEvents(roomId);
     }
 
-    private RoomEvent recordEvent(Room room, RoomEventType type, String operatorUserId, String targetUserId, JsonNode payload) {
+    private RoomEvent recordEvent(
+            Room room,
+            RoomEventType type,
+            String operatorUserId,
+            String targetUserId,
+            JsonNode payload,
+            List<String> additionalRecipients
+    ) {
         validateRoom(room);
         long now = timeProvider.nowMillis();
         RoomEvent event = new RoomEvent(
@@ -139,7 +191,7 @@ public class RoomEventService {
         );
         roomEventRepository.append(event);
 
-        List<String> visibleTo = resolveVisibleRecipients(room.roomId(), type);
+        List<String> visibleTo = resolveVisibleRecipients(room.roomId(), type, additionalRecipients);
         pushEvent(event, visibleTo);
 
         if (shouldCreateSystemMessage(type, visibleTo)) {
@@ -163,12 +215,23 @@ public class RoomEventService {
         return event;
     }
 
-    private List<String> resolveVisibleRecipients(String roomId, RoomEventType type) {
-        List<String> onlineRecipients = resolveOnlineRecipients(roomId);
-        if (type == RoomEventType.ROOM_EMPTY) {
-            return onlineRecipients;
+    private List<String> resolveVisibleRecipients(String roomId, RoomEventType type, List<String> additionalRecipients) {
+        LinkedHashSet<String> recipients = new LinkedHashSet<>(resolveOnlineRecipients(roomId));
+        if (type == RoomEventType.USER_KICKED || type == RoomEventType.USER_BANNED || type == RoomEventType.ROOM_EMPTY) {
+            addRecipients(recipients, additionalRecipients);
         }
-        return onlineRecipients;
+        return List.copyOf(recipients);
+    }
+
+    private void addRecipients(LinkedHashSet<String> recipients, List<String> additionalRecipients) {
+        if (additionalRecipients == null) {
+            return;
+        }
+        for (String userId : additionalRecipients) {
+            if (userId != null && !userId.isBlank()) {
+                recipients.add(userId);
+            }
+        }
     }
 
     private List<String> resolveOnlineRecipients(String roomId) {
@@ -220,8 +283,14 @@ public class RoomEventService {
                     + " to "
                     + textValue(event.payload(), "toUserId", event.targetUserId())
                     + ".";
+            case USER_MUTED -> nicknameFromPayload(event.payload(), event.targetUserId())
+                    + " was muted for "
+                    + numberValue(event.payload(), "durationMinutes", 0)
+                    + " minutes.";
+            case USER_KICKED -> nicknameFromPayload(event.payload(), event.targetUserId()) + " was kicked from the room.";
+            case USER_BANNED -> nicknameFromPayload(event.payload(), event.targetUserId()) + " was banned from the room.";
             case ROOM_EMPTY -> "The room is now empty.";
-            case USER_MUTED, USER_KICKED, USER_BANNED, ROOM_EXPIRED -> throw new IllegalArgumentException(
+            case ROOM_EXPIRED -> throw new IllegalArgumentException(
                     "event type is outside current card scope: " + event.type()
             );
         };
@@ -250,6 +319,19 @@ public class RoomEventService {
         return fallback;
     }
 
+    private int numberValue(JsonNode payload, String fieldName, int fallback) {
+        if (payload != null && payload.hasNonNull(fieldName)) {
+            return payload.get(fieldName).asInt(fallback);
+        }
+        return fallback;
+    }
+
+    private void putOptionalText(ObjectNode payload, String fieldName, String value) {
+        if (value != null && !value.isBlank()) {
+            payload.put(fieldName, value);
+        }
+    }
+
     private String blankToNull(String value) {
         if (value == null || value.isBlank()) {
             return null;
@@ -263,4 +345,3 @@ public class RoomEventService {
         }
     }
 }
-

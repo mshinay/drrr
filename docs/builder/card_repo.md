@@ -2,43 +2,61 @@
 
 ## Active Card
 
-Title: Card 08R: Fix Room Event Review Blockers
+Title: Card 09: Implement Governance Commands
 
 Status:
-Implemented and verified in the backend workspace. This follow-up fixes the Card 08 review blockers around join/config-change room-event wiring, reconnect-event gating, and lifecycle side-effect dispatch timing.
+Implemented and verified in the backend workspace.
 
 Goal:
-Resolve the Card 08 review blockers before closeout without changing the documented HTTP/WebSocket contracts, Redis model split, or room lifecycle semantics.
+Implement owner-only mute, kick, and ban commands with Redis governance records, room-event/system-message generation, kick/ban target notification, and chat/join enforcement that matches the current MVP contract.
 
 Files Involved:
-- `src/main/java/com/boot/drrr/repository/user/UserSessionRepository.java`
-- `src/main/java/com/boot/drrr/service/room/RoomService.java`
-- `src/main/java/com/boot/drrr/service/user/UserSessionService.java`
-- `src/test/java/com/boot/drrr/service/room/RoomServiceTest.java`
-- `src/test/java/com/boot/drrr/service/user/UserSessionServiceTest.java`
+- `src/main/java/com/boot/drrr/service/governance/GovernanceService.java`
+- `src/main/java/com/boot/drrr/service/governance/MuteMemberCommand.java`
+- `src/main/java/com/boot/drrr/service/governance/KickMemberCommand.java`
+- `src/main/java/com/boot/drrr/service/governance/BanMemberCommand.java`
+- `src/main/java/com/boot/drrr/service/governance/MuteMemberResult.java`
+- `src/main/java/com/boot/drrr/service/governance/KickMemberResult.java`
+- `src/main/java/com/boot/drrr/service/governance/BanMemberResult.java`
+- `src/main/java/com/boot/drrr/service/event/RoomEventService.java`
+- `src/main/java/com/boot/drrr/web/controller/GovernanceController.java`
+- `src/main/java/com/boot/drrr/web/dto/governance/MuteMemberRequest.java`
+- `src/main/java/com/boot/drrr/web/dto/governance/MuteMemberResponse.java`
+- `src/main/java/com/boot/drrr/web/dto/governance/KickMemberRequest.java`
+- `src/main/java/com/boot/drrr/web/dto/governance/KickMemberResponse.java`
+- `src/main/java/com/boot/drrr/web/dto/governance/BanMemberRequest.java`
+- `src/main/java/com/boot/drrr/web/dto/governance/BanMemberResponse.java`
+- `src/test/java/com/boot/drrr/service/governance/GovernanceServiceTest.java`
+- `src/test/java/com/boot/drrr/web/controller/GovernanceControllerTest.java`
 - `docs/builder/card_repo.md`
 
-Review-Fix Scope:
-- Wired `RoomService.joinRoom(...)` to record `USER_JOIN` after the locked room/member/session/index mutation succeeds.
-- Wired `RoomService.updateRoom(...)` to create the room-configuration `SYSTEM` message after the locked room update succeeds, keeping `sourceEventId=null` and `sourceEventType=null`.
-- Refactored room lifecycle methods to collect pending room-event/system-message side effects inside the lifecycle lock and dispatch them synchronously after the lock is released.
-- Kept existing leave-room event behavior, but moved `USER_LEAVE`, `OWNER_TRANSFER`, and `ROOM_EMPTY` side effects out of the lifecycle lock as part of the same dispatch model.
-- Added `UserSessionRepository.isReconnectingUser(...)` and gated `USER_RECONNECTED` emission in `UserSessionService.markRoomConnected(...)` so first successful WebSocket connections for already-online members do not create reconnect events.
-- Preserved the real reconnect path: `markRoomDisconnected(...)` still records `USER_RECONNECTING`, and a subsequent reconnect from reconnecting state still records `USER_RECONNECTED`.
-- Added focused tests for:
-  - join-room `USER_JOIN` creation and lock-outside dispatch timing
-  - update-room config `SYSTEM` message creation and lock-outside dispatch timing
-  - first-connect-no-reconnect behavior
-  - real reconnect behavior
+Implementation Scope:
+- Added `GovernanceService` as the owner-checked application entry for `muteMember(...)`, `kickMember(...)`, and `banMember(...)`.
+- Implemented `POST /api/rooms/{roomId}/members/{targetUserId}/mute`, `/kick`, and `/ban` through `GovernanceController` and dedicated governance DTOs.
+- Persisted mute runtime state through the existing governance Redis repository using the documented ZSet + detail key pair.
+- Persisted ban runtime state through the existing governance Redis repository using the documented Set + detail key pair.
+- Enforced owner-only governance by requiring the operator to be the current room owner member before any mutation runs.
+- Required target membership for mute and kick, and required target user existence for ban so offline users can still be banned.
+- Cleared kicked/banned users from the room member structures, cleared `currentRoomId`, removed reconnecting markers, and kept kicked users rejoinable when they are not banned.
+- Reused existing join-time ban enforcement and existing send-time mute enforcement so governance immediately affects chat and room entry behavior.
+- Extended `RoomEventService` to record `USER_MUTED`, `USER_KICKED`, and `USER_BANNED`, generate matching `SYSTEM` messages, and include the kicked/banned target in event/message visibility where required.
+- Kept unrelated pre-existing doc edits in `doc/*.md` and `docs/planner/builder-task-cards.md` untouched.
 
 Verification Run:
 - Executed with Java 21:
   - `JAVA_HOME=D:\work\language\Java\21`
   - `PATH=D:\work\language\Java\21\bin;%PATH%`
-  - `./mvnw.cmd -q "-Dtest=RoomEventServiceTest,RoomServiceTest,UserSessionServiceTest,MessageServiceTest,RoomWebSocketOperationsTest,RoomWebSocketHandlerAndHandshakeTest,RoomControllerTest,SessionControllerTest" test`
+  - `./mvnw.cmd -q "-Dtest=GovernanceServiceTest,GovernanceControllerTest,RoomEventServiceTest,MessageServiceTest,RoomServiceTest" test`
 - Result: passed.
 
+Acceptance Coverage:
+- Non-owner governance requests fail with `FORBIDDEN`.
+- Muted users are blocked from both public and direct messages until the mute expires.
+- Kicked users lose room membership, lose reconnect recovery for the old room, and can rejoin when not banned.
+- Banned users are removed when present, remain banned on repeated ban calls, and cannot rejoin the room.
+- Governance actions append matching `RoomEvent` entries, generate matching `SYSTEM` messages, and notify the kicked/banned target connection when it still exists.
+
 Scope Guard:
-This review-fix round stays inside Card 08 blockers only. It does not add new `RoomEventType` values, change message persistence contracts, redesign the lifecycle lock model, or introduce Card 09 behavior.
+This card stays within governance command delivery plus the required event/message integration. It does not introduce moderator roles, temporary bans, or new persistence beyond the documented Redis runtime records and `RoomEvent` history.
 
 ready-for-closeout: yes
