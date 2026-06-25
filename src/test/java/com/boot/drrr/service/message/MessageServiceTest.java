@@ -9,6 +9,7 @@ import com.boot.drrr.common.id.IdGenerator;
 import com.boot.drrr.common.lock.JvmRoomLock;
 import com.boot.drrr.common.time.TimeProvider;
 import com.boot.drrr.config.DrrrProperties;
+import com.boot.drrr.domain.event.RoomEvent;
 import com.boot.drrr.domain.governance.MuteRecord;
 import com.boot.drrr.domain.message.Message;
 import com.boot.drrr.domain.message.MessageType;
@@ -27,13 +28,14 @@ import com.boot.drrr.repository.room.RoomIndexRepository.RoomIndexKey;
 import com.boot.drrr.repository.room.RoomMemberRepository;
 import com.boot.drrr.repository.room.RoomRepository;
 import com.boot.drrr.repository.user.UserSessionRepository;
+import com.boot.drrr.service.event.RoomEventService;
 import com.boot.drrr.service.user.UserSessionService;
+import com.boot.drrr.ws.RoomWebSocketOperations;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -213,17 +215,18 @@ class MessageServiceTest {
                     null,
                     rooms,
                     members,
+                    new NoOpRoomEventService(),
                     ids,
                     time,
                     properties
             );
+            RoomMessagePersistence messagePersistence = new RoomMessagePersistence(messages, rooms, indexes);
             this.service = new MessageService(
                     userSessionService,
-                    rooms,
                     members,
                     governance,
                     messages,
-                    indexes,
+                    messagePersistence,
                     ids,
                     time,
                     new JvmRoomLock()
@@ -482,6 +485,32 @@ class MessageServiceTest {
         @Override
         public Clock clock() {
             return Clock.fixed(Instant.ofEpochMilli(nowMillis), ZoneOffset.UTC);
+        }
+    }
+
+    private static final class NoOpRoomEventService extends RoomEventService {
+        private NoOpRoomEventService() {
+            super(null, null, null, new RoomWebSocketOperations(new com.boot.drrr.ws.RoomWebSocketConnectionRegistry(), null), null, null, null);
+        }
+
+        @Override
+        public RoomEvent recordUserJoin(Room room, RoomMember joinedMember) {
+            return null;
+        }
+
+        @Override
+        public RoomEvent recordUserLeave(Room room, RoomMember leavingMember) {
+            return null;
+        }
+
+        @Override
+        public RoomEvent recordUserReconnecting(Room room, RoomMember reconnectingMember, long lastDisconnectedAt) {
+            return null;
+        }
+
+        @Override
+        public RoomEvent recordUserReconnected(Room room, RoomMember reconnectedMember, long reconnectedAt) {
+            return null;
         }
     }
 }

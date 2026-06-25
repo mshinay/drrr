@@ -27,7 +27,7 @@ class SessionControllerTest {
     @Test
     void createSessionReturnsDocumentedEnvelope() throws Exception {
         validator.afterPropertiesSet();
-        UserSessionService service = new UserSessionService(null, null, null, null, null, null, new DrrrProperties()) {
+        UserSessionService service = new UserSessionService(null, null, null, null, null, null, null, new DrrrProperties()) {
             @Override
             public UserSession createAnonymousSession(String nickname) {
                 return new UserSession(
@@ -64,7 +64,7 @@ class SessionControllerTest {
     @Test
     void createSessionRejectsBlankNicknameWithInvalidRequestEnvelope() throws Exception {
         validator.afterPropertiesSet();
-        UserSessionService service = new UserSessionService(null, null, null, null, null, null, new DrrrProperties());
+        UserSessionService service = new UserSessionService(null, null, null, null, null, null, null, new DrrrProperties());
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(new SessionController(service))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setValidator(validator)
@@ -81,3 +81,4 @@ class SessionControllerTest {
                 .andExpect(jsonPath("$.error.message").value("nickname: must not be blank"));
     }
 }
+

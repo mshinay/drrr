@@ -9,16 +9,10 @@ import com.boot.drrr.domain.governance.MuteRecord;
 import com.boot.drrr.domain.message.Message;
 import com.boot.drrr.domain.message.MessageType;
 import com.boot.drrr.domain.room.HistoryStrategy;
-import com.boot.drrr.domain.room.HistoryStrategyType;
-import com.boot.drrr.domain.room.Room;
 import com.boot.drrr.domain.room.RoomMember;
-import com.boot.drrr.domain.room.RoomStatus;
 import com.boot.drrr.repository.governance.GovernanceRepository;
 import com.boot.drrr.repository.message.MessageRepository;
-import com.boot.drrr.repository.room.RoomIndexRepository;
-import com.boot.drrr.repository.room.RoomIndexRepository.RoomIndexKey;
 import com.boot.drrr.repository.room.RoomMemberRepository;
-import com.boot.drrr.repository.room.RoomRepository;
 import com.boot.drrr.service.user.RoomSessionContext;
 import com.boot.drrr.service.user.UserSessionService;
 import java.time.Duration;
@@ -30,32 +24,29 @@ import org.springframework.stereotype.Service;
 @Service
 public class MessageService {
     private final UserSessionService userSessionService;
-    private final RoomRepository roomRepository;
     private final RoomMemberRepository roomMemberRepository;
     private final GovernanceRepository governanceRepository;
     private final MessageRepository messageRepository;
-    private final RoomIndexRepository roomIndexRepository;
+    private final RoomMessagePersistence roomMessagePersistence;
     private final IdGenerator idGenerator;
     private final TimeProvider timeProvider;
     private final RoomLock roomLock;
 
     public MessageService(
             UserSessionService userSessionService,
-            RoomRepository roomRepository,
             RoomMemberRepository roomMemberRepository,
             GovernanceRepository governanceRepository,
             MessageRepository messageRepository,
-            RoomIndexRepository roomIndexRepository,
+            RoomMessagePersistence roomMessagePersistence,
             IdGenerator idGenerator,
             TimeProvider timeProvider,
             RoomLock roomLock
     ) {
         this.userSessionService = userSessionService;
-        this.roomRepository = roomRepository;
         this.roomMemberRepository = roomMemberRepository;
         this.governanceRepository = governanceRepository;
         this.messageRepository = messageRepository;
-        this.roomIndexRepository = roomIndexRepository;
+        this.roomMessagePersistence = roomMessagePersistence;
         this.idGenerator = idGenerator;
         this.timeProvider = timeProvider;
         this.roomLock = roomLock;
@@ -82,7 +73,7 @@ public class MessageService {
                     null,
                     now
             );
-            persistMessage(context.room(), message, now);
+            roomMessagePersistence.store(context.room(), message, now);
             return message;
         });
     }
@@ -113,7 +104,7 @@ public class MessageService {
                     null,
                     now
             );
-            persistMessage(context.room(), message, now);
+            roomMessagePersistence.store(context.room(), message, now);
             return message;
         });
     }
@@ -158,80 +149,6 @@ public class MessageService {
         throw new BusinessException(ErrorCode.USER_MUTED);
     }
 
-    private void persistMessage(Room room, Message message, long now) {
-        messageRepository.append(message);
-        trimStoredHistory(room.roomId(), room.historyStrategy(), now);
-
-        Room refreshedRoom = new Room(
-                room.roomId(),
-                room.name(),
-                room.description(),
-                room.passwordHash(),
-                room.maxMembers(),
-                room.ownerUserId(),
-                room.initialOwnerUserId(),
-                RoomStatus.ACTIVE,
-                room.userListVisible(),
-                room.historyStrategy(),
-                room.allowOwnerConfigChange(),
-                room.createdAt(),
-                now,
-                null
-        );
-        roomRepository.save(refreshedRoom);
-        roomIndexRepository.zAdd(RoomIndexKey.ACTIVE, room.roomId(), now);
-        roomIndexRepository.zRem(RoomIndexKey.EMPTY, room.roomId());
-    }
-
-    private void trimStoredHistory(String roomId, HistoryStrategy historyStrategy, long now) {
-        List<Message> messages = messageRepository.listMessages(roomId);
-        if (messages.isEmpty()) {
-            return;
-        }
-
-        switch (historyStrategy.type()) {
-            case NONE -> messageRepository.deleteAll(roomId);
-            case COUNT -> trimCountHistory(roomId, messages, historyStrategy.value());
-            case MINUTES -> trimMinuteHistory(roomId, messages, historyStrategy.value(), now);
-        }
-    }
-
-    private void trimCountHistory(String roomId, List<Message> messages, Integer keepCount) {
-        int keep = keepCount == null ? 0 : keepCount;
-        if (keep <= 0) {
-            messageRepository.deleteAll(roomId);
-            return;
-        }
-        if (messages.size() <= keep) {
-            return;
-        }
-        int start = messages.size() - keep;
-        messageRepository.trim(roomId, start, messages.size() - 1L);
-    }
-
-    private void trimMinuteHistory(String roomId, List<Message> messages, Integer minutes, long now) {
-        int keepMinutes = minutes == null ? 0 : minutes;
-        if (keepMinutes <= 0) {
-            messageRepository.deleteAll(roomId);
-            return;
-        }
-
-        long cutoff = now - Duration.ofMinutes(keepMinutes).toMillis();
-        int firstVisibleIndex = 0;
-        while (firstVisibleIndex < messages.size() && messages.get(firstVisibleIndex).sentAt() < cutoff) {
-            firstVisibleIndex++;
-        }
-
-        if (firstVisibleIndex <= 0) {
-            return;
-        }
-        if (firstVisibleIndex >= messages.size()) {
-            messageRepository.deleteAll(roomId);
-            return;
-        }
-        messageRepository.trim(roomId, firstVisibleIndex, messages.size() - 1L);
-    }
-
     private List<Message> applyHistoryStrategy(HistoryStrategy historyStrategy, List<Message> messages, long now) {
         return switch (historyStrategy.type()) {
             case NONE -> List.of();
@@ -263,10 +180,11 @@ public class MessageService {
     }
 
     private boolean isVisibleTo(Message message, String viewerUserId) {
-        if (message.type() != MessageType.DIRECT) {
-            return true;
-        }
-        return message.visibleTo() != null && message.visibleTo().contains(viewerUserId);
+        return switch (message.type()) {
+            case PUBLIC -> true;
+            case DIRECT -> message.visibleTo() != null && message.visibleTo().contains(viewerUserId);
+            case SYSTEM -> message.visibleTo() == null || message.visibleTo().isEmpty() || message.visibleTo().contains(viewerUserId);
+        };
     }
 
     private Set<String> visibleUsers(String senderUserId, String targetUserId) {

@@ -20,9 +20,11 @@ import com.boot.drrr.repository.room.RoomIndexRepository.RoomIndexKey;
 import com.boot.drrr.repository.room.RoomMemberRepository;
 import com.boot.drrr.repository.room.RoomRepository;
 import com.boot.drrr.repository.user.UserSessionRepository;
+import com.boot.drrr.service.event.RoomEventService;
 import com.boot.drrr.service.owner.OwnerTransferService;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -33,6 +35,7 @@ public class RoomService {
     private final RoomIndexRepository roomIndexRepository;
     private final GovernanceRepository governanceRepository;
     private final OwnerTransferService ownerTransferService;
+    private final RoomEventService roomEventService;
     private final RoomPasswordHasher roomPasswordHasher;
     private final IdGenerator idGenerator;
     private final TimeProvider timeProvider;
@@ -46,6 +49,7 @@ public class RoomService {
             RoomIndexRepository roomIndexRepository,
             GovernanceRepository governanceRepository,
             OwnerTransferService ownerTransferService,
+            RoomEventService roomEventService,
             RoomPasswordHasher roomPasswordHasher,
             IdGenerator idGenerator,
             TimeProvider timeProvider,
@@ -58,6 +62,7 @@ public class RoomService {
         this.roomIndexRepository = roomIndexRepository;
         this.governanceRepository = governanceRepository;
         this.ownerTransferService = ownerTransferService;
+        this.roomEventService = roomEventService;
         this.roomPasswordHasher = roomPasswordHasher;
         this.idGenerator = idGenerator;
         this.timeProvider = timeProvider;
@@ -118,7 +123,7 @@ public class RoomService {
             userSessionRepository.save(updatedUserSession);
             roomIndexRepository.zAdd(RoomIndexKey.ACTIVE, roomId, now);
             roomIndexRepository.zRem(RoomIndexKey.EMPTY, roomId);
-            return new CreateRoomView(room, creator);
+            return lockedResult(new CreateRoomView(room, creator));
         });
     }
 
@@ -185,7 +190,10 @@ public class RoomService {
             roomIndexRepository.zRem(RoomIndexKey.EMPTY, roomId);
 
             List<RoomMember> members = roomMemberRepository.listMembers(roomId);
-            return new JoinRoomView(reactivatedRoom, newMember, members);
+            return lockedResult(
+                    new JoinRoomView(reactivatedRoom, newMember, members),
+                    () -> roomEventService.recordUserJoin(reactivatedRoom, newMember)
+            );
         });
     }
 
@@ -272,7 +280,20 @@ public class RoomService {
                 roomIndexRepository.zRem(RoomIndexKey.EMPTY, roomId);
             }
 
-            return new LeaveRoomResult(true, ownerTransferred, newOwnerUserId, updatedRoom.status());
+            List<Runnable> pendingSideEffects = new ArrayList<>();
+            pendingSideEffects.add(() -> roomEventService.recordUserLeave(updatedRoom, leavingMember));
+            if (ownerTransferred && newOwnerUserId != null) {
+                String ownerUserId = newOwnerUserId;
+                pendingSideEffects.add(() -> roomEventService.recordOwnerTransfer(updatedRoom, leavingMember.userId(), ownerUserId));
+            }
+            if (updatedRoom.status() == RoomStatus.EMPTY && updatedRoom.emptySince() != null) {
+                long emptySince = updatedRoom.emptySince();
+                pendingSideEffects.add(() -> roomEventService.recordRoomEmpty(updatedRoom, emptySince));
+            }
+            return new LockedResult<>(
+                    new LeaveRoomResult(true, ownerTransferred, newOwnerUserId, updatedRoom.status()),
+                    pendingSideEffects
+            );
         });
     }
 
@@ -315,12 +336,27 @@ public class RoomService {
             );
             roomRepository.save(updatedRoom);
             roomIndexRepository.zAdd(RoomIndexKey.ACTIVE, roomId, now);
-            return new UpdateRoomView(updatedRoom);
+            return lockedResult(
+                    new UpdateRoomView(updatedRoom),
+                    () -> roomEventService.createRoomConfigSystemMessage(
+                            updatedRoom,
+                            command.operatorUserId(),
+                            userSession.nickname()
+                    )
+            );
         });
     }
 
-    private <T> T withLocks(String userId, String roomId, java.util.function.Supplier<T> supplier) {
-        return roomLock.supply(lockKeys(userId, roomId), supplier);
+    private <T> T withLocks(String userId, String roomId, Supplier<LockedResult<T>> supplier) {
+        LockedResult<T> result = roomLock.supply(lockKeys(userId, roomId), supplier);
+        for (Runnable pendingSideEffect : result.pendingSideEffects()) {
+            pendingSideEffect.run();
+        }
+        return result.value();
+    }
+
+    private <T> LockedResult<T> lockedResult(T value, Runnable... pendingSideEffects) {
+        return new LockedResult<>(value, List.of(pendingSideEffects));
     }
 
     private List<String> lockKeys(String userId, String roomId) {
@@ -504,5 +540,8 @@ public class RoomService {
 
     private String normalizeOptional(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private record LockedResult<T>(T value, List<Runnable> pendingSideEffects) {
     }
 }

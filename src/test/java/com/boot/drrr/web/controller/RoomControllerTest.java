@@ -42,7 +42,7 @@ class RoomControllerTest {
     void createJoinLeaveAndUpdateReturnDocumentedEnvelope() throws Exception {
         validator.afterPropertiesSet();
         RoomPasswordHasher hasher = new RoomPasswordHasher();
-        RoomService service = new RoomService(null, null, null, null, null, null, null, null, null, null, null) {
+        RoomService service = new RoomService(null, null, null, null, null, null, null, null, null, null, null, null) {
             @Override
             public CreateRoomView createRoom(CreateRoomCommand command) {
                 return new CreateRoomView(
@@ -186,7 +186,7 @@ class RoomControllerTest {
     @Test
     void createRoomRejectsBlankNameWithInvalidRequestEnvelope() throws Exception {
         validator.afterPropertiesSet();
-        RoomService service = new RoomService(null, null, null, null, null, null, null, null, null, null, null);
+        RoomService service = new RoomService(null, null, null, null, null, null, null, null, null, null, null, null);
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(new RoomController(service))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setValidator(validator)
@@ -211,4 +211,5 @@ class RoomControllerTest {
                 .andExpect(jsonPath("$.error.message").value("name: must not be blank"));
     }
 }
+
 

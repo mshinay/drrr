@@ -5,6 +5,7 @@ import com.boot.drrr.common.error.ErrorCode;
 import com.boot.drrr.common.json.JsonCodec;
 import com.boot.drrr.common.ws.WsOutboundMessage;
 import java.io.IOException;
+import java.util.LinkedHashSet;
 import java.util.List;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
@@ -38,6 +39,21 @@ public class RoomWebSocketOperations {
     public void pushToUser(String roomId, String userId, WsOutboundMessage<?> message) {
         registry.findRoomUserSession(roomId, userId)
                 .ifPresent(session -> send(session, message));
+    }
+
+    public void pushToUsers(String roomId, Iterable<String> userIds, WsOutboundMessage<?> message) {
+        if (userIds == null) {
+            return;
+        }
+        LinkedHashSet<String> distinctUserIds = new LinkedHashSet<>();
+        for (String userId : userIds) {
+            if (userId != null && !userId.isBlank()) {
+                distinctUserIds.add(userId);
+            }
+        }
+        for (String userId : distinctUserIds) {
+            pushToUser(roomId, userId, message);
+        }
     }
 
     public void pushError(WebSocketSession session, String requestId, BusinessException exception) {

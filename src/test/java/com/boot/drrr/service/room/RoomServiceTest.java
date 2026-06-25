@@ -30,23 +30,21 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 class RoomServiceTest {
@@ -142,6 +140,24 @@ class RoomServiceTest {
     }
 
     @Test
+    void joinRoomRecordsUserJoinAfterLockRelease() {
+        TrackingRoomLock roomLock = new TrackingRoomLock();
+        RecordingRoomEventService roomEventService = new RecordingRoomEventService(roomLock::isInsideLock);
+        Fixture fixture = new Fixture(1717300300000L, new InMemoryRoomMemberRepository(), roomLock, roomEventService);
+        fixture.userSessions.save(fixture.user("u_owner", "Owner", null));
+        fixture.userSessions.save(fixture.user("u_bob", "Bob", null));
+        String roomId = fixture.createRoomFor("r_001", "u_owner", "Owner", RoomStatus.ACTIVE, null, 1717300000000L, null);
+
+        JoinRoomView joined = fixture.service.joinRoom(roomId, new JoinRoomCommand("u_bob", null));
+
+        assertThat(joined.member().userId()).isEqualTo("u_bob");
+        assertThat(roomEventService.userJoinCallCount).isEqualTo(1);
+        assertThat(roomEventService.joinedRoom.roomId()).isEqualTo(roomId);
+        assertThat(roomEventService.joinedMember.userId()).isEqualTo("u_bob");
+        assertThat(roomEventService.userJoinInsideLock).isFalse();
+    }
+
+    @Test
     void joinRoomRejectsInvalidPassword() {
         Fixture fixture = new Fixture(1717300300000L);
         fixture.userSessions.save(fixture.user("u_owner", "Owner", null));
@@ -208,7 +224,7 @@ class RoomServiceTest {
     @Test
     void joinRoomPreventsSameUserFromEnteringTwoRoomsConcurrently() throws Exception {
         CoordinatedRoomMemberRepository coordinatedMembers = new CoordinatedRoomMemberRepository();
-        Fixture fixture = new Fixture(1717300350000L, coordinatedMembers, new JvmRoomLock());
+        Fixture fixture = new Fixture(1717300350000L, coordinatedMembers, new JvmRoomLock(), new RecordingRoomEventService(() -> false));
         fixture.userSessions.save(fixture.user("u_owner_1", "Owner1", null));
         fixture.userSessions.save(fixture.user("u_owner_2", "Owner2", null));
         fixture.userSessions.save(fixture.user("u_alice", "Alice", null));
@@ -399,6 +415,47 @@ class RoomServiceTest {
     }
 
     @Test
+    void updateRoomCreatesConfigSystemMessageAfterLockRelease() {
+        TrackingRoomLock roomLock = new TrackingRoomLock();
+        RecordingRoomEventService roomEventService = new RecordingRoomEventService(roomLock::isInsideLock);
+        Fixture fixture = new Fixture(1717300600000L, new InMemoryRoomMemberRepository(), roomLock, roomEventService);
+        fixture.userSessions.save(fixture.user("u_owner", "Owner", "r_001"));
+        fixture.rooms.save(new Room(
+                "r_001",
+                "Old Name",
+                "Old desc",
+                null,
+                6,
+                "u_owner",
+                "u_owner",
+                RoomStatus.ACTIVE,
+                true,
+                new HistoryStrategy(HistoryStrategyType.COUNT, 50),
+                true,
+                1717300000000L,
+                1717300000000L,
+                null
+        ));
+        fixture.members.save(new RoomMember("r_001", "u_owner", "Owner", MemberStatus.ONLINE, 1717300000000L, 1717300000000L, true));
+
+        UpdateRoomView updated = fixture.service.updateRoom("r_001", new UpdateRoomCommand(
+                "u_owner",
+                " New Name ",
+                " new desc ",
+                false,
+                new HistoryStrategy(HistoryStrategyType.MINUTES, 30),
+                true
+        ));
+
+        assertThat(updated.room().name()).isEqualTo("New Name");
+        assertThat(roomEventService.configMessageCallCount).isEqualTo(1);
+        assertThat(roomEventService.configRoom.roomId()).isEqualTo("r_001");
+        assertThat(roomEventService.configOperatorUserId).isEqualTo("u_owner");
+        assertThat(roomEventService.configOperatorNickname).isEqualTo("Owner");
+        assertThat(roomEventService.configMessageInsideLock).isFalse();
+    }
+
+    @Test
     void updateRoomAllowsInheritedOwnerWhenConfigChangeEnabled() {
         Fixture fixture = new Fixture(1717300605000L);
         fixture.userSessions.save(fixture.user("u_bob", "Bob", "r_001"));
@@ -483,14 +540,16 @@ class RoomServiceTest {
         private final InMemoryRoomIndexRepository indexes = new InMemoryRoomIndexRepository();
         private final InMemoryGovernanceRepository governance = new InMemoryGovernanceRepository();
         private final DrrrProperties properties = new DrrrProperties();
+        private final RecordingRoomEventService roomEventService;
         private final RoomService service;
 
         private Fixture(long nowMillis) {
-            this(nowMillis, new InMemoryRoomMemberRepository(), new JvmRoomLock());
+            this(nowMillis, new InMemoryRoomMemberRepository(), new JvmRoomLock(), new RecordingRoomEventService(() -> false));
         }
 
-        private Fixture(long nowMillis, InMemoryRoomMemberRepository members, RoomLock roomLock) {
+        private Fixture(long nowMillis, InMemoryRoomMemberRepository members, RoomLock roomLock, RecordingRoomEventService roomEventService) {
             this.members = members;
+            this.roomEventService = roomEventService;
             this.service = new RoomService(
                     userSessions,
                     rooms,
@@ -498,6 +557,7 @@ class RoomServiceTest {
                     indexes,
                     governance,
                     new OwnerTransferService(),
+                    this.roomEventService,
                     new RoomPasswordHasher(),
                     new FixedIdGenerator(),
                     new FixedTimeProvider(nowMillis),
@@ -720,6 +780,92 @@ class RoomServiceTest {
         }
     }
 
+    private static final class RecordingRoomEventService extends com.boot.drrr.service.event.RoomEventService {
+        private final BooleanSupplier insideLockSupplier;
+        private int userJoinCallCount;
+        private Room joinedRoom;
+        private RoomMember joinedMember;
+        private boolean userJoinInsideLock;
+        private int configMessageCallCount;
+        private Room configRoom;
+        private String configOperatorUserId;
+        private String configOperatorNickname;
+        private boolean configMessageInsideLock;
+
+        private RecordingRoomEventService(BooleanSupplier insideLockSupplier) {
+            super(null, null, null, new com.boot.drrr.ws.RoomWebSocketOperations(new com.boot.drrr.ws.RoomWebSocketConnectionRegistry(), null), null, null, null);
+            this.insideLockSupplier = insideLockSupplier;
+        }
+
+        @Override
+        public com.boot.drrr.domain.event.RoomEvent recordUserJoin(Room room, RoomMember joinedMember) {
+            this.userJoinCallCount++;
+            this.joinedRoom = room;
+            this.joinedMember = joinedMember;
+            this.userJoinInsideLock = insideLockSupplier.getAsBoolean();
+            return null;
+        }
+
+        @Override
+        public com.boot.drrr.domain.event.RoomEvent recordUserLeave(Room room, RoomMember leavingMember) {
+            return null;
+        }
+
+        @Override
+        public com.boot.drrr.domain.event.RoomEvent recordOwnerTransfer(Room room, String fromUserId, String toUserId) {
+            return null;
+        }
+
+        @Override
+        public com.boot.drrr.domain.event.RoomEvent recordRoomEmpty(Room room, long emptySince) {
+            return null;
+        }
+
+        @Override
+        public com.boot.drrr.domain.message.Message createRoomConfigSystemMessage(Room room, String operatorUserId, String operatorNickname) {
+            this.configMessageCallCount++;
+            this.configRoom = room;
+            this.configOperatorUserId = operatorUserId;
+            this.configOperatorNickname = operatorNickname;
+            this.configMessageInsideLock = insideLockSupplier.getAsBoolean();
+            return null;
+        }
+    }
+
+    private static final class TrackingRoomLock implements RoomLock {
+        private final RoomLock delegate = new JvmRoomLock();
+        private final AtomicInteger depth = new AtomicInteger();
+
+        @Override
+        public void execute(List<String> lockKeys, Runnable action) {
+            supply(lockKeys, () -> {
+                action.run();
+                return null;
+            });
+        }
+
+        @Override
+        public <T> T supply(List<String> lockKeys, Supplier<T> supplier) {
+            return delegate.supply(lockKeys, () -> {
+                depth.incrementAndGet();
+                try {
+                    return supplier.get();
+                } finally {
+                    depth.decrementAndGet();
+                }
+            });
+        }
+
+        @Override
+        public void release(String lockKey) {
+            delegate.release(lockKey);
+        }
+
+        private boolean isInsideLock() {
+            return depth.get() > 0;
+        }
+    }
+
     private static final class FixedIdGenerator implements IdGenerator {
         @Override
         public String newUserId() {
@@ -765,4 +911,3 @@ class RoomServiceTest {
         }
     }
 }
-

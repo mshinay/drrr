@@ -15,6 +15,7 @@ import com.boot.drrr.repository.lobby.LobbyRepository;
 import com.boot.drrr.repository.room.RoomMemberRepository;
 import com.boot.drrr.repository.room.RoomRepository;
 import com.boot.drrr.repository.user.UserSessionRepository;
+import com.boot.drrr.service.event.RoomEventService;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -23,6 +24,7 @@ public class UserSessionService {
     private final LobbyRepository lobbyRepository;
     private final RoomRepository roomRepository;
     private final RoomMemberRepository roomMemberRepository;
+    private final RoomEventService roomEventService;
     private final IdGenerator idGenerator;
     private final TimeProvider timeProvider;
     private final DrrrProperties drrrProperties;
@@ -32,6 +34,7 @@ public class UserSessionService {
             LobbyRepository lobbyRepository,
             RoomRepository roomRepository,
             RoomMemberRepository roomMemberRepository,
+            RoomEventService roomEventService,
             IdGenerator idGenerator,
             TimeProvider timeProvider,
             DrrrProperties drrrProperties
@@ -40,6 +43,7 @@ public class UserSessionService {
         this.lobbyRepository = lobbyRepository;
         this.roomRepository = roomRepository;
         this.roomMemberRepository = roomMemberRepository;
+        this.roomEventService = roomEventService;
         this.idGenerator = idGenerator;
         this.timeProvider = timeProvider;
         this.drrrProperties = drrrProperties;
@@ -93,6 +97,9 @@ public class UserSessionService {
 
     public RoomSessionContext markRoomConnected(String userId, String roomId) {
         RoomSessionContext context = validateRoomConnection(userId, roomId);
+        boolean shouldRecordReconnect = context.userSession().status() == UserStatus.RECONNECTING
+                || context.roomMember().memberStatus() == MemberStatus.RECONNECTING
+                || userSessionRepository.isReconnectingUser(userId);
         long now = timeProvider.nowMillis();
 
         UserSession updatedSession = new UserSession(
@@ -119,6 +126,9 @@ public class UserSessionService {
         userSessionRepository.save(updatedSession);
         userSessionRepository.removeReconnectingUser(userId);
         roomMemberRepository.save(updatedMember);
+        if (shouldRecordReconnect) {
+            roomEventService.recordUserReconnected(context.room(), updatedMember, now);
+        }
         return new RoomSessionContext(roomId, userId, updatedSession, context.room(), updatedMember);
     }
 
@@ -147,16 +157,26 @@ public class UserSessionService {
         userSessionRepository.save(reconnectingSession);
         userSessionRepository.saveReconnectingUser(userId, now);
 
-        roomMemberRepository.findMember(roomId, userId)
-                .ifPresent(member -> roomMemberRepository.save(new RoomMember(
-                        member.roomId(),
-                        member.userId(),
-                        member.nickname(),
-                        MemberStatus.RECONNECTING,
-                        member.joinedAt(),
-                        now,
-                        member.isOwner()
-                )));
+        RoomMember updatedMember = roomMemberRepository.findMember(roomId, userId)
+                .map(member -> {
+                    RoomMember reconnectingMember = new RoomMember(
+                            member.roomId(),
+                            member.userId(),
+                            member.nickname(),
+                            MemberStatus.RECONNECTING,
+                            member.joinedAt(),
+                            now,
+                            member.isOwner()
+                    );
+                    roomMemberRepository.save(reconnectingMember);
+                    return reconnectingMember;
+                })
+                .orElse(null);
+
+        Room room = roomRepository.findById(roomId).orElse(null);
+        if (updatedMember != null && room != null && !isExpired(room)) {
+            roomEventService.recordUserReconnecting(room, updatedMember, now);
+        }
     }
 
     private boolean isExpired(Room room) {

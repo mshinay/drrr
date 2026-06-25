@@ -203,7 +203,7 @@ class RoomWebSocketHandlerAndHandshakeTest {
         private String disconnectedRoomId;
 
         private StubUserSessionService() {
-            super(null, null, null, null, null, null, new com.boot.drrr.config.DrrrProperties());
+            super(null, null, null, null, null, null, null, new com.boot.drrr.config.DrrrProperties());
         }
 
         @Override
@@ -235,7 +235,7 @@ class RoomWebSocketHandlerAndHandshakeTest {
         private final List<SendDirectMessageCommand> directCommands = new java.util.ArrayList<>();
 
         private StubMessageService() {
-            super(null, null, null, null, null, null, null, null, new com.boot.drrr.common.lock.JvmRoomLock());
+            super(null, null, null, null, null, null, null, new com.boot.drrr.common.lock.JvmRoomLock());
         }
 
         @Override
@@ -277,3 +277,4 @@ class RoomWebSocketHandlerAndHandshakeTest {
         }
     }
 }
+

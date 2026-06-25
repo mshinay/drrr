@@ -36,6 +36,10 @@ public class UserSessionRepository {
         redisOps.zsets().add(RedisKeys.USER_RECONNECTING, userId, lastDisconnectedAt);
     }
 
+    public boolean isReconnectingUser(String userId) {
+        return redisOps.zsets().score(RedisKeys.USER_RECONNECTING, userId) != null;
+    }
+
     public void removeReconnectingUser(String userId) {
         redisOps.zsets().remove(RedisKeys.USER_RECONNECTING, userId);
     }

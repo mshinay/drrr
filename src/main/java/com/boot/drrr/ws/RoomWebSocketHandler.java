@@ -46,8 +46,13 @@ public class RoomWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionEstablished(WebSocketSession session) {
         String roomId = requiredAttribute(session, RoomWebSocketAttributes.ROOM_ID);
         String userId = requiredAttribute(session, RoomWebSocketAttributes.USER_ID);
-        userSessionService.markRoomConnected(userId, roomId);
         registry.register(roomId, userId, session);
+        try {
+            userSessionService.markRoomConnected(userId, roomId);
+        } catch (RuntimeException exception) {
+            registry.unregister(session.getId());
+            throw exception;
+        }
     }
 
     @Override
